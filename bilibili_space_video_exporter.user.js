@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         Bilibili UP主全部公开视频导出
 // @namespace    https://space.bilibili.com/
-// @version      1.0.0
+// @version      1.0.1
 // @description  在B站UP主空间中自动翻页获取全部公开投稿，并导出CSV/JSON。
 // @author       ChatGPT
 // @match        https://space.bilibili.com/*
 // @connect      api.bilibili.com
 // @require      https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js
-// @grant        none
+// @grant        GM_download
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -57,14 +57,42 @@
 
   function downloadBlob(filename, text, mimeType) {
     const blob = new Blob([text], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 3000);
+
+    const fallbackDownload = () => {
+      // 不把 <a> 插入 B 站 DOM，避免其 SPA 全局点击处理器劫持 blob: URL。
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.style.display = 'none';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    };
+
+    if (typeof GM_download !== 'function') {
+      fallbackDownload();
+      return Promise.resolve();
+    }
+
+    return new Promise((resolve) => {
+      try {
+        GM_download({
+          url: blob,
+          name: filename,
+          saveAs: false,
+          onload: () => resolve(),
+          onerror: (err) => {
+            console.warn('[Bilibili投稿导出] GM_download失败，改用浏览器下载：', err);
+            fallbackDownload();
+            resolve();
+          },
+        });
+      } catch (err) {
+        console.warn('[Bilibili投稿导出] GM_download异常，改用浏览器下载：', err);
+        fallbackDownload();
+        resolve();
+      }
+    });
   }
 
   function toCsv(rows) {
@@ -331,9 +359,9 @@
         videos: rows,
       };
 
-      downloadBlob(`${base}.json`, JSON.stringify(jsonOutput, null, 2), 'application/json;charset=utf-8');
+      await downloadBlob(`${base}.json`, JSON.stringify(jsonOutput, null, 2), 'application/json;charset=utf-8');
       await sleep(250);
-      downloadBlob(`${base}.csv`, toCsv(rows), 'text/csv;charset=utf-8');
+      await downloadBlob(`${base}.csv`, toCsv(rows), 'text/csv;charset=utf-8');
 
       setStatus(`完成。\n接口报告 ${total} 个，实际导出 ${rows.length} 个。\n已下载 JSON + CSV。`);
     } catch (err) {
