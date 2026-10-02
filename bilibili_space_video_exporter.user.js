@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili UP主全部公开视频导出
 // @namespace    https://space.bilibili.com/
-// @version      1.1.0
+// @version      1.1.1
 // @description  获取B站UP主全部公开投稿，按合集状态筛选、勾选后导出CSV/JSON。
 // @author       ChatGPT
 // @match        https://space.bilibili.com/*
@@ -268,6 +268,7 @@
       <div class="bae-status">等待开始</div>
       <div class="bae-actions">
         <button class="bae-start">获取投稿列表</button>
+        <button class="bae-reexport" disabled>选择并导出</button>
         <button class="bae-cancel" disabled>停止</button>
       </div>
     `;
@@ -290,6 +291,7 @@
         font-size: 13px;
       }
       #bili-all-video-exporter .bae-start { flex: 1; background: #00aeec; color: #fff; }
+      #bili-all-video-exporter .bae-reexport { flex: 1; background: #00b578; color: #fff; }
       #bili-all-video-exporter .bae-cancel { background: #f1f2f3; color: #61666d; }
       #bili-all-video-exporter button:disabled { opacity: .5; cursor: not-allowed; }
     `;
@@ -298,6 +300,13 @@
     document.body.appendChild(root);
 
     root.querySelector('.bae-start').addEventListener('click', runExport);
+    root.querySelector('.bae-reexport').addEventListener('click', () => {
+      if (!fetchedRows.length || !exportContext) {
+        setStatus('还没有已获取的投稿列表，请先点击“获取投稿列表”。');
+        return;
+      }
+      showSelectionDialog(fetchedRows, exportContext);
+    });
     root.querySelector('.bae-cancel').addEventListener('click', () => {
       cancelled = true;
       setStatus('正在停止……');
@@ -558,7 +567,7 @@
         await sleep(250);
         await downloadBlob(`${base}.csv`, toCsv(chosen), 'text/csv;charset=utf-8');
 
-        setStatus(`已导出 ${chosen.length} 个视频。`);
+        setStatus(`已导出 ${chosen.length} 个视频。\n可点击“选择并导出”继续使用当前已获取列表。`);
         closeSelectionDialog();
       } catch (err) {
         console.error('[Bilibili投稿导出]', err);
@@ -578,8 +587,10 @@
 
   function setButtons(isRunning) {
     const start = document.querySelector('#bili-all-video-exporter .bae-start');
+    const reexport = document.querySelector('#bili-all-video-exporter .bae-reexport');
     const cancel = document.querySelector('#bili-all-video-exporter .bae-cancel');
     if (start) start.disabled = isRunning;
+    if (reexport) reexport.disabled = isRunning || !fetchedRows.length || !exportContext;
     if (cancel) cancel.disabled = !isRunning;
   }
 
@@ -638,6 +649,7 @@
         reportedTotal: total,
         source: location.href,
       };
+      setButtons(false);
 
       setStatus(
         `读取完成：${rows.length} 个公开视频。\n其中 ${uncollectedCount} 个未加入合集。\n请在弹出的列表中选择要导出的条目。`
