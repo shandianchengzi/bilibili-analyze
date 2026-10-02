@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Bilibili UP主全部公开视频导出
 // @namespace    https://space.bilibili.com/
-// @version      1.0.1
-// @description  在B站UP主空间中自动翻页获取全部公开投稿，并导出CSV/JSON。
+// @version      1.1.0
+// @description  获取B站UP主全部公开投稿，按合集状态筛选、勾选后导出CSV/JSON。
 // @author       ChatGPT
 // @match        https://space.bilibili.com/*
 // @connect      api.bilibili.com
@@ -27,6 +27,8 @@
   let running = false;
   let cancelled = false;
   let lastUid = null;
+  let fetchedRows = [];
+  let exportContext = null;
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -117,6 +119,10 @@
       ['UP主UID', 'mid'],
       ['版权类型', 'copyright'],
       ['合作视频', 'is_union_video'],
+      ['是否加入合集', 'in_collection'],
+      ['合集ID', 'season_id'],
+      ['合集名称', 'season_title'],
+      ['合集视频数', 'season_ep_count'],
     ];
 
     const esc = (v) => {
@@ -219,6 +225,9 @@
   function normalizeVideo(v, index) {
     const created = Number(v.created || v.pubdate || 0);
     const bvid = v.bvid || '';
+    const seasonId = Number(v.season_id || v.meta?.id || v.meta?.stat?.season_id || 0);
+    const seasonTitle = v.meta?.title || '';
+    const seasonEpCount = Number(v.meta?.ep_count || v.meta?.ep_num || 0);
     return {
       index,
       title: v.title || '',
@@ -239,6 +248,10 @@
       mid: v.mid ?? '',
       copyright: v.copyright ?? '',
       is_union_video: v.is_union_video ?? '',
+      in_collection: seasonId > 0 ? '是' : '否',
+      season_id: seasonId,
+      season_title: seasonTitle,
+      season_ep_count: seasonEpCount,
       raw: v,
     };
   }
@@ -252,7 +265,7 @@
       <div class="bae-title">UP主投稿导出</div>
       <div class="bae-status">等待开始</div>
       <div class="bae-actions">
-        <button class="bae-start">导出全部公开视频</button>
+        <button class="bae-start">获取投稿列表</button>
         <button class="bae-cancel" disabled>停止</button>
       </div>
     `;
@@ -261,7 +274,7 @@
     style.textContent = `
       #bili-all-video-exporter {
         position: fixed; right: 20px; bottom: 24px; z-index: 2147483647;
-        width: 280px; padding: 14px; box-sizing: border-box;
+        width: 300px; padding: 14px; box-sizing: border-box;
         background: rgba(255,255,255,.97); color: #18191c;
         border: 1px solid #e3e5e7; border-radius: 10px;
         box-shadow: 0 6px 24px rgba(0,0,0,.16);
@@ -287,6 +300,272 @@
       cancelled = true;
       setStatus('正在停止……');
     });
+  }
+
+
+  function escapeHtml(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  function closeSelectionDialog() {
+    document.getElementById('bae-selection-overlay')?.remove();
+  }
+
+  function showSelectionDialog(rows, context) {
+    closeSelectionDialog();
+
+    const selected = new Set(
+      rows.filter((row) => !row.season_id).map((row) => String(row.bvid || row.aid))
+    );
+
+    const overlay = document.createElement('div');
+    overlay.id = 'bae-selection-overlay';
+    overlay.innerHTML = \`
+      <div class="bae-modal">
+        <div class="bae-modal-header">
+          <div>
+            <div class="bae-modal-title">选择要导出的视频</div>
+            <div class="bae-modal-summary">
+              共 \${rows.length} 个投稿，其中未加入合集
+              <strong>\${rows.filter((r) => !r.season_id).length}</strong> 个。
+              默认已选中全部未加入合集的视频。
+            </div>
+          </div>
+          <button class="bae-close" title="关闭">×</button>
+        </div>
+
+        <div class="bae-toolbar">
+          <select class="bae-filter">
+            <option value="uncollected" selected>未加入合集</option>
+            <option value="all">全部投稿</option>
+            <option value="collected">已加入合集</option>
+          </select>
+          <input class="bae-search" type="search" placeholder="搜索标题…" />
+          <button class="bae-select-visible">全选当前筛选</button>
+          <button class="bae-clear-visible">清空当前筛选</button>
+        </div>
+
+        <div class="bae-list-head">
+          <span class="bae-visible-count"></span>
+          <span class="bae-selected-count"></span>
+        </div>
+        <div class="bae-video-list"></div>
+
+        <div class="bae-modal-footer">
+          <button class="bae-close-footer">取消</button>
+          <button class="bae-export-selected">导出已选视频</button>
+        </div>
+      </div>
+    \`;
+
+    const style = document.createElement('style');
+    style.id = 'bae-selection-style';
+    style.textContent = \`
+      #bae-selection-overlay {
+        position: fixed; inset: 0; z-index: 2147483647;
+        background: rgba(0,0,0,.48); display: flex; align-items: center; justify-content: center;
+        padding: 24px; box-sizing: border-box;
+        font: 14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+      }
+      #bae-selection-overlay .bae-modal {
+        width: min(980px, 96vw); height: min(760px, 92vh);
+        background: #fff; color: #18191c; border-radius: 12px;
+        box-shadow: 0 12px 42px rgba(0,0,0,.28); display: flex; flex-direction: column;
+        overflow: hidden;
+      }
+      #bae-selection-overlay .bae-modal-header {
+        display: flex; justify-content: space-between; gap: 16px; align-items: flex-start;
+        padding: 18px 20px 14px; border-bottom: 1px solid #e3e5e7;
+      }
+      #bae-selection-overlay .bae-modal-title { font-size: 18px; font-weight: 700; }
+      #bae-selection-overlay .bae-modal-summary { margin-top: 5px; color: #61666d; }
+      #bae-selection-overlay .bae-close {
+        border: 0; background: transparent; font-size: 26px; line-height: 1; cursor: pointer; color: #9499a0;
+      }
+      #bae-selection-overlay .bae-toolbar {
+        display: flex; gap: 8px; padding: 12px 20px; border-bottom: 1px solid #eee; flex-wrap: wrap;
+      }
+      #bae-selection-overlay select,
+      #bae-selection-overlay input,
+      #bae-selection-overlay button {
+        font: inherit;
+      }
+      #bae-selection-overlay .bae-filter,
+      #bae-selection-overlay .bae-search {
+        border: 1px solid #c9ccd0; border-radius: 6px; padding: 7px 9px; background: #fff;
+      }
+      #bae-selection-overlay .bae-search { flex: 1; min-width: 180px; }
+      #bae-selection-overlay .bae-toolbar button,
+      #bae-selection-overlay .bae-modal-footer button {
+        border: 1px solid #c9ccd0; border-radius: 6px; padding: 7px 11px; background: #fff; cursor: pointer;
+      }
+      #bae-selection-overlay .bae-list-head {
+        display: flex; justify-content: space-between; padding: 8px 20px; color: #61666d;
+        background: #f6f7f8; border-bottom: 1px solid #eee;
+      }
+      #bae-selection-overlay .bae-video-list { flex: 1; overflow: auto; }
+      #bae-selection-overlay .bae-row {
+        display: grid; grid-template-columns: 32px 92px minmax(0, 1fr) 150px;
+        gap: 10px; align-items: center; padding: 10px 20px; border-bottom: 1px solid #f1f2f3;
+      }
+      #bae-selection-overlay .bae-row:hover { background: #fafafa; }
+      #bae-selection-overlay .bae-cover {
+        width: 92px; height: 58px; object-fit: cover; border-radius: 5px; background: #eee;
+      }
+      #bae-selection-overlay .bae-video-title {
+        color: #18191c; text-decoration: none; font-weight: 600; display: block;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      #bae-selection-overlay .bae-video-title:hover { color: #00aeec; }
+      #bae-selection-overlay .bae-meta { margin-top: 5px; color: #9499a0; font-size: 12px; }
+      #bae-selection-overlay .bae-season {
+        color: #61666d; font-size: 12px; overflow: hidden; text-overflow: ellipsis;
+      }
+      #bae-selection-overlay .bae-no-season { color: #d4380d; }
+      #bae-selection-overlay .bae-modal-footer {
+        display: flex; justify-content: flex-end; gap: 10px; padding: 13px 20px;
+        border-top: 1px solid #e3e5e7; background: #fff;
+      }
+      #bae-selection-overlay .bae-export-selected {
+        background: #00aeec !important; color: #fff; border-color: #00aeec !important;
+      }
+      #bae-selection-overlay .bae-export-selected:disabled { opacity: .5; cursor: not-allowed; }
+    \`;
+    document.documentElement.appendChild(style);
+    document.body.appendChild(overlay);
+
+    const listEl = overlay.querySelector('.bae-video-list');
+    const filterEl = overlay.querySelector('.bae-filter');
+    const searchEl = overlay.querySelector('.bae-search');
+    const visibleCountEl = overlay.querySelector('.bae-visible-count');
+    const selectedCountEl = overlay.querySelector('.bae-selected-count');
+    const exportBtn = overlay.querySelector('.bae-export-selected');
+
+    const keyOf = (row) => String(row.bvid || row.aid);
+
+    function getVisibleRows() {
+      const mode = filterEl.value;
+      const keyword = searchEl.value.trim().toLowerCase();
+      return rows.filter((row) => {
+        const collectionMatch =
+          mode === 'all' ||
+          (mode === 'uncollected' && !row.season_id) ||
+          (mode === 'collected' && !!row.season_id);
+        const keywordMatch = !keyword || row.title.toLowerCase().includes(keyword);
+        return collectionMatch && keywordMatch;
+      });
+    }
+
+    function updateCounts(visibleRows) {
+      visibleCountEl.textContent = \`当前显示 \${visibleRows.length} 个\`;
+      selectedCountEl.textContent = \`已选 \${selected.size} 个\`;
+      exportBtn.disabled = selected.size === 0;
+      exportBtn.textContent = selected.size ? \`导出已选视频（\${selected.size}）\` : '导出已选视频';
+    }
+
+    function render() {
+      const visibleRows = getVisibleRows();
+      listEl.innerHTML = visibleRows.map((row) => {
+        const key = keyOf(row);
+        const checked = selected.has(key) ? 'checked' : '';
+        const collection = row.season_id
+          ? \`<span>合集：\${escapeHtml(row.season_title || String(row.season_id))}</span>\`
+          : '<span class="bae-no-season">未加入合集</span>';
+        return \`
+          <label class="bae-row">
+            <input class="bae-check" type="checkbox" data-key="\${escapeHtml(key)}" \${checked} />
+            <img class="bae-cover" src="\${escapeHtml(row.cover)}" loading="lazy" />
+            <div>
+              <a class="bae-video-title" href="\${escapeHtml(row.url)}" target="_blank" rel="noopener noreferrer">
+                \${escapeHtml(row.title)}
+              </a>
+              <div class="bae-meta">\${escapeHtml(row.publish_time)} · \${escapeHtml(row.duration)} · \${escapeHtml(row.bvid)}</div>
+            </div>
+            <div class="bae-season">\${collection}</div>
+          </label>
+        \`;
+      }).join('');
+
+      listEl.querySelectorAll('.bae-check').forEach((checkbox) => {
+        checkbox.addEventListener('change', () => {
+          const key = checkbox.dataset.key;
+          if (checkbox.checked) selected.add(key);
+          else selected.delete(key);
+          updateCounts(visibleRows);
+        });
+      });
+
+      updateCounts(visibleRows);
+    }
+
+    filterEl.addEventListener('change', render);
+    searchEl.addEventListener('input', render);
+
+    overlay.querySelector('.bae-select-visible').addEventListener('click', () => {
+      getVisibleRows().forEach((row) => selected.add(keyOf(row)));
+      render();
+    });
+
+    overlay.querySelector('.bae-clear-visible').addEventListener('click', () => {
+      getVisibleRows().forEach((row) => selected.delete(keyOf(row)));
+      render();
+    });
+
+    const close = () => closeSelectionDialog();
+    overlay.querySelector('.bae-close').addEventListener('click', close);
+    overlay.querySelector('.bae-close-footer').addEventListener('click', close);
+
+    exportBtn.addEventListener('click', async () => {
+      const chosen = rows
+        .filter((row) => selected.has(keyOf(row)))
+        .map((row, i) => ({ ...row, index: i + 1 }));
+
+      if (!chosen.length) return;
+
+      exportBtn.disabled = true;
+      exportBtn.textContent = '正在导出……';
+
+      try {
+        const suffix = chosen.every((r) => !r.season_id) ? '未加入合集' : '已选投稿';
+        const base = safeFilename(
+          \`\${context.author}_\${context.uid}_\${suffix}_\${new Date().toISOString().slice(0, 10)}\`
+        );
+        const jsonOutput = {
+          exported_at: new Date().toISOString(),
+          uid: context.uid,
+          author: context.author,
+          reported_total: context.reportedTotal,
+          available_total: rows.length,
+          exported_total: chosen.length,
+          filter_note: suffix,
+          source: context.source,
+          videos: chosen,
+        };
+
+        await downloadBlob(
+          \`\${base}.json\`,
+          JSON.stringify(jsonOutput, null, 2),
+          'application/json;charset=utf-8'
+        );
+        await sleep(250);
+        await downloadBlob(\`\${base}.csv\`, toCsv(chosen), 'text/csv;charset=utf-8');
+
+        setStatus(\`已导出 \${chosen.length} 个视频。\`);
+        closeSelectionDialog();
+      } catch (err) {
+        console.error('[Bilibili投稿导出]', err);
+        alert(\`导出失败：\${err?.message || err}\`);
+        exportBtn.disabled = false;
+        updateCounts(getVisibleRows());
+      }
+    });
+
+    render();
   }
 
   function setStatus(text) {
@@ -347,23 +626,20 @@
 
       const rows = deduped.map((v, i) => normalizeVideo(v, i + 1));
       const author = rows.find((x) => x.author)?.author || `UID_${uid}`;
-      const base = safeFilename(`${author}_${uid}_公开投稿_${new Date().toISOString().slice(0, 10)}`);
+      const uncollectedCount = rows.filter((row) => !row.season_id).length;
 
-      const jsonOutput = {
-        exported_at: new Date().toISOString(),
+      fetchedRows = rows;
+      exportContext = {
         uid,
         author,
-        reported_total: total,
-        exported_total: rows.length,
+        reportedTotal: total,
         source: location.href,
-        videos: rows,
       };
 
-      await downloadBlob(`${base}.json`, JSON.stringify(jsonOutput, null, 2), 'application/json;charset=utf-8');
-      await sleep(250);
-      await downloadBlob(`${base}.csv`, toCsv(rows), 'text/csv;charset=utf-8');
-
-      setStatus(`完成。\n接口报告 ${total} 个，实际导出 ${rows.length} 个。\n已下载 JSON + CSV。`);
+      setStatus(
+        `读取完成：${rows.length} 个公开视频。\n其中 ${uncollectedCount} 个未加入合集。\n请在弹出的列表中选择要导出的条目。`
+      );
+      showSelectionDialog(fetchedRows, exportContext);
     } catch (err) {
       console.error('[Bilibili投稿导出]', err);
       setStatus(`失败：${err?.message || err}`);
