@@ -1,15 +1,20 @@
 // ==UserScript==
 // @name         Bilibili 投稿与视频章节导出
-// @namespace    https://space.bilibili.com/
-// @version      1.2.0
+// @namespace    https://github.com/shandianchengzi/bilibili-analyze
+// @version      1.2.1
 // @description  获取B站UP主公开投稿并筛选导出；在视频播放页获取并导出章节/看点信息。
-// @author       ChatGPT
+// @author       shandianchengzi
+// @license      MIT
+// @homepageURL  https://github.com/shandianchengzi/bilibili-analyze
+// @supportURL   https://github.com/shandianchengzi/bilibili-analyze/issues
+// @name:en      Bilibili Uploads and Video Chapters Exporter
+// @description:en Export public uploads with collection filters, and copy or export video chapters as JSON and CSV.
 // @match        https://space.bilibili.com/*
 // @match        https://www.bilibili.com/video/*
-// @connect      api.bilibili.com
 // @require      https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js
 // @grant        GM_download
 // @run-at       document-idle
+// @noframes
 // ==/UserScript==
 
 (() => {

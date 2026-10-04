@@ -1,0 +1,17 @@
+脚本名称：Bilibili 投稿与视频章节导出
+简短描述：获取B站UP主公开投稿并筛选导出；在视频播放页获取并导出章节/看点信息。
+语言：简体中文（zh-CN）
+脚本类型：普通脚本（不是库）
+作者：shandianchengzi
+版本：1.2.1
+协议：MIT
+适用网站：space.bilibili.com、www.bilibili.com（由 @match 自动识别）
+源码文件：bilibili_space_video_exporter.user.js
+源码同步地址：https://raw.githubusercontent.com/shandianchengzi/bilibili-analyze/main/bilibili_space_video_exporter.user.js
+主页：https://github.com/shandianchengzi/bilibili-analyze
+反馈：https://github.com/shandianchengzi/bilibili-analyze/issues
+详细介绍：复制 docs/GREASYFORK.md 的 Markdown 正文
+英文名称：Bilibili Uploads and Video Chapters Exporter
+英文描述：Export public uploads with collection filters, and copy or export video chapters as JSON and CSV.
+发布后回填：Greasy Fork 脚本页面 URL、CSDN 文章 URL
+注意：同步地址用于 Greasy Fork 从 GitHub 同步源码；如页面没有此选项，粘贴完整 .user.js 文件即可。
