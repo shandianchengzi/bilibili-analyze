@@ -1,10 +1,11 @@
 // ==UserScript==
-// @name         Bilibili UP主全部公开视频导出
+// @name         Bilibili 投稿与视频章节导出
 // @namespace    https://space.bilibili.com/
-// @version      1.1.1
-// @description  获取B站UP主全部公开投稿，按合集状态筛选、勾选后导出CSV/JSON。
+// @version      1.2.0
+// @description  获取B站UP主公开投稿并筛选导出；在视频播放页获取并导出章节/看点信息。
 // @author       ChatGPT
 // @match        https://space.bilibili.com/*
+// @match        https://www.bilibili.com/video/*
 // @connect      api.bilibili.com
 // @require      https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js
 // @grant        GM_download
@@ -29,6 +30,10 @@
   let lastUid = null;
   let fetchedRows = [];
   let exportContext = null;
+
+  let chapterRows = [];
+  let chapterContext = null;
+  let lastVideoKey = null;
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -664,6 +669,380 @@
     }
   }
 
+
+  function getBvidFromUrl() {
+    const m = location.pathname.match(/^\/video\/(BV[0-9A-Za-z]+)/i);
+    return m ? m[1] : null;
+  }
+
+  function getCurrentVideoPageNo() {
+    const p = Number(new URL(location.href).searchParams.get('p') || 1);
+    return Number.isFinite(p) && p > 0 ? Math.floor(p) : 1;
+  }
+
+  function formatClock(seconds) {
+    const total = Math.max(0, Math.floor(Number(seconds) || 0));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    const pad = (n) => String(n).padStart(2, '0');
+    return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+  }
+
+  function toChapterCsv(rows) {
+    const columns = [
+      ['序号', 'index'],
+      ['章节标题', 'title'],
+      ['开始时间', 'start_time'],
+      ['结束时间', 'end_time'],
+      ['开始秒数', 'from'],
+      ['结束秒数', 'to'],
+      ['持续秒数', 'duration_seconds'],
+      ['章节图片', 'image_url'],
+      ['类型', 'type'],
+      ['团队类型', 'team_type'],
+      ['团队名称', 'team_name'],
+    ];
+
+    const esc = (v) => {
+      const s = v == null ? '' : String(v);
+      return `"${s.replace(/"/g, '""')}"`;
+    };
+
+    return '\ufeff' + [
+      columns.map(([label]) => esc(label)).join(','),
+      ...rows.map((row) => columns.map(([, key]) => esc(row[key])).join(',')),
+    ].join('\r\n');
+  }
+
+  async function fetchVideoDetail(bvid) {
+    const json = await apiFetch('/x/web-interface/view', { bvid });
+    if (json.code !== 0 || !json.data) {
+      throw new Error(`获取视频信息失败：${json.code} ${json.message || ''}`);
+    }
+    return json.data;
+  }
+
+  async function fetchPlayerInfo(bvid, cid) {
+    let json = await apiFetch('/x/player/v2', { bvid, cid });
+
+    if (json.code !== 0) {
+      const { imgKey, subKey } = await getWbiKeys();
+      const query = signWbi({ bvid, cid }, imgKey, subKey);
+      json = await apiFetch(`/x/player/wbi/v2?${query}`);
+    }
+
+    if (json.code !== 0 || !json.data) {
+      throw new Error(`获取播放器章节失败：${json.code} ${json.message || ''}`);
+    }
+    return json.data;
+  }
+
+  function normalizeChapter(point, index) {
+    const from = Number(point.from || 0);
+    const to = Number(point.to || 0);
+    return {
+      index,
+      title: point.content || '',
+      from,
+      to,
+      start_time: formatClock(from),
+      end_time: formatClock(to),
+      duration_seconds: Math.max(0, Number((to - from).toFixed(3))),
+      image_url: normalizeCover(point.imgUrl || point.img_url || ''),
+      type: point.type ?? '',
+      team_type: point.team_type ?? '',
+      team_name: point.team_name ?? '',
+      raw: point,
+    };
+  }
+
+  function closeChapterDialog() {
+    document.getElementById('bae-chapter-overlay')?.remove();
+    document.getElementById('bae-chapter-style')?.remove();
+  }
+
+  function showChapterDialog(rows, context) {
+    closeChapterDialog();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'bae-chapter-overlay';
+    overlay.innerHTML = `
+      <div class="bae-chapter-modal">
+        <div class="bae-chapter-header">
+          <div>
+            <div class="bae-chapter-title">视频章节</div>
+            <div class="bae-chapter-summary">
+              ${escapeHtml(context.title)}
+              ${context.pageCount > 1 ? ` · P${context.pageNo}：${escapeHtml(context.partTitle)}` : ''}
+              · 共 ${rows.length} 个章节
+            </div>
+          </div>
+          <button class="bae-chapter-close" title="关闭">×</button>
+        </div>
+
+        <div class="bae-chapter-list">
+          ${rows.map((row) => `
+            <div class="bae-chapter-row">
+              <div class="bae-chapter-index">${row.index}</div>
+              <img class="bae-chapter-cover" src="${escapeHtml(row.image_url)}" loading="lazy" />
+              <div class="bae-chapter-main">
+                <div class="bae-chapter-name">${escapeHtml(row.title)}</div>
+                <div class="bae-chapter-time">${escapeHtml(row.start_time)} → ${escapeHtml(row.end_time)} · ${row.duration_seconds}s</div>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+
+        <div class="bae-chapter-footer">
+          <button class="bae-copy-chapters">复制章节文本</button>
+          <button class="bae-export-chapter-json">导出 JSON</button>
+          <button class="bae-export-chapter-csv">导出 CSV</button>
+          <button class="bae-chapter-close-footer">关闭</button>
+        </div>
+      </div>
+    `;
+
+    const style = document.createElement('style');
+    style.id = 'bae-chapter-style';
+    style.textContent = `
+      #bae-chapter-overlay {
+        position: fixed; inset: 0; z-index: 2147483647; background: rgba(0,0,0,.48);
+        display: flex; align-items: center; justify-content: center; padding: 24px; box-sizing: border-box;
+        font: 14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+      }
+      #bae-chapter-overlay .bae-chapter-modal {
+        width: min(900px,96vw); height: min(760px,92vh); background: #fff; color: #18191c;
+        border-radius: 12px; box-shadow: 0 12px 42px rgba(0,0,0,.28);
+        display: flex; flex-direction: column; overflow: hidden;
+      }
+      #bae-chapter-overlay .bae-chapter-header {
+        display: flex; justify-content: space-between; gap: 16px; padding: 18px 20px 14px;
+        border-bottom: 1px solid #e3e5e7;
+      }
+      #bae-chapter-overlay .bae-chapter-title { font-size: 18px; font-weight: 700; }
+      #bae-chapter-overlay .bae-chapter-summary { margin-top: 5px; color: #61666d; }
+      #bae-chapter-overlay .bae-chapter-close {
+        border: 0; background: transparent; font-size: 26px; line-height: 1; cursor: pointer; color: #9499a0;
+      }
+      #bae-chapter-overlay .bae-chapter-list { flex: 1; overflow: auto; }
+      #bae-chapter-overlay .bae-chapter-row {
+        display: grid; grid-template-columns: 42px 128px minmax(0,1fr);
+        gap: 12px; align-items: center; padding: 12px 20px; border-bottom: 1px solid #f1f2f3;
+      }
+      #bae-chapter-overlay .bae-chapter-row:hover { background: #fafafa; }
+      #bae-chapter-overlay .bae-chapter-index { color: #9499a0; text-align: center; }
+      #bae-chapter-overlay .bae-chapter-cover {
+        width: 128px; height: 72px; border-radius: 6px; object-fit: cover; background: #eee;
+      }
+      #bae-chapter-overlay .bae-chapter-name { font-size: 15px; font-weight: 600; }
+      #bae-chapter-overlay .bae-chapter-time { margin-top: 6px; color: #9499a0; font-size: 12px; }
+      #bae-chapter-overlay .bae-chapter-footer {
+        display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap;
+        padding: 13px 20px; border-top: 1px solid #e3e5e7;
+      }
+      #bae-chapter-overlay .bae-chapter-footer button {
+        border: 1px solid #c9ccd0; border-radius: 6px; padding: 7px 11px; background: #fff; cursor: pointer;
+      }
+      #bae-chapter-overlay .bae-export-chapter-json,
+      #bae-chapter-overlay .bae-export-chapter-csv {
+        background: #00aeec !important; color: #fff; border-color: #00aeec !important;
+      }
+    `;
+
+    document.documentElement.appendChild(style);
+    document.body.appendChild(overlay);
+
+    const close = () => closeChapterDialog();
+    overlay.querySelector('.bae-chapter-close').addEventListener('click', close);
+    overlay.querySelector('.bae-chapter-close-footer').addEventListener('click', close);
+
+    overlay.querySelector('.bae-copy-chapters').addEventListener('click', async (event) => {
+      const text = rows.map((row) => `${row.start_time} ${row.title}`).join('\n');
+      const button = event.currentTarget;
+      try {
+        await navigator.clipboard.writeText(text);
+        button.textContent = '已复制';
+        setTimeout(() => { button.textContent = '复制章节文本'; }, 1200);
+      } catch (err) {
+        console.warn('[Bilibili章节导出] 剪贴板写入失败：', err);
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        textarea.remove();
+        button.textContent = '已复制';
+        setTimeout(() => { button.textContent = '复制章节文本'; }, 1200);
+      }
+    });
+
+    const buildOutput = () => ({
+      exported_at: new Date().toISOString(),
+      bvid: context.bvid,
+      aid: context.aid,
+      cid: context.cid,
+      title: context.title,
+      page_no: context.pageNo,
+      page_count: context.pageCount,
+      part_title: context.partTitle,
+      source: context.source,
+      chapter_count: rows.length,
+      chapters: rows,
+    });
+
+    const base = safeFilename(
+      `${context.title}_${context.bvid}${context.pageCount > 1 ? `_P${context.pageNo}` : ''}_章节`
+    );
+
+    overlay.querySelector('.bae-export-chapter-json').addEventListener('click', async () => {
+      await downloadBlob(
+        `${base}.json`,
+        JSON.stringify(buildOutput(), null, 2),
+        'application/json;charset=utf-8'
+      );
+      setChapterStatus(`已导出 ${rows.length} 个章节的 JSON。`);
+    });
+
+    overlay.querySelector('.bae-export-chapter-csv').addEventListener('click', async () => {
+      await downloadBlob(
+        `${base}.csv`,
+        toChapterCsv(rows),
+        'text/csv;charset=utf-8'
+      );
+      setChapterStatus(`已导出 ${rows.length} 个章节的 CSV。`);
+    });
+  }
+
+  function setChapterStatus(text) {
+    const el = document.querySelector('#bili-chapter-exporter .bae-chapter-status');
+    if (el) el.textContent = text;
+  }
+
+  function createChapterUi() {
+    if (document.getElementById('bili-chapter-exporter')) return;
+
+    const root = document.createElement('div');
+    root.id = 'bili-chapter-exporter';
+    root.innerHTML = `
+      <div class="bae-chapter-panel-title">视频章节导出</div>
+      <div class="bae-chapter-status">等待获取当前视频章节</div>
+      <div class="bae-chapter-actions">
+        <button class="bae-fetch-chapter">获取章节</button>
+        <button class="bae-view-chapter" disabled>再次查看</button>
+      </div>
+    `;
+
+    const style = document.createElement('style');
+    style.id = 'bae-chapter-panel-style';
+    style.textContent = `
+      #bili-chapter-exporter {
+        position: fixed; right: 20px; bottom: 24px; z-index: 2147483646;
+        width: 300px; padding: 14px; box-sizing: border-box;
+        background: rgba(255,255,255,.97); color: #18191c;
+        border: 1px solid #e3e5e7; border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,.16);
+        font: 14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+      }
+      #bili-chapter-exporter .bae-chapter-panel-title { font-weight: 700; margin-bottom: 7px; }
+      #bili-chapter-exporter .bae-chapter-status {
+        min-height: 42px; color: #61666d; white-space: pre-wrap; word-break: break-word;
+      }
+      #bili-chapter-exporter .bae-chapter-actions { display: flex; gap: 8px; margin-top: 10px; }
+      #bili-chapter-exporter button {
+        flex: 1; border: 0; border-radius: 6px; padding: 7px 10px; cursor: pointer; font-size: 13px;
+      }
+      #bili-chapter-exporter .bae-fetch-chapter { background: #00aeec; color: #fff; }
+      #bili-chapter-exporter .bae-view-chapter { background: #00b578; color: #fff; }
+      #bili-chapter-exporter button:disabled { opacity: .5; cursor: not-allowed; }
+    `;
+
+    document.documentElement.appendChild(style);
+    document.body.appendChild(root);
+
+    root.querySelector('.bae-fetch-chapter').addEventListener('click', fetchCurrentVideoChapters);
+    root.querySelector('.bae-view-chapter').addEventListener('click', () => {
+      if (chapterRows.length && chapterContext) showChapterDialog(chapterRows, chapterContext);
+    });
+  }
+
+  async function fetchCurrentVideoChapters() {
+    const bvid = getBvidFromUrl();
+    if (!bvid) {
+      setChapterStatus('没有从当前网址识别到 BV 号。');
+      return;
+    }
+
+    const fetchBtn = document.querySelector('#bili-chapter-exporter .bae-fetch-chapter');
+    const viewBtn = document.querySelector('#bili-chapter-exporter .bae-view-chapter');
+    if (fetchBtn) fetchBtn.disabled = true;
+    if (viewBtn) viewBtn.disabled = true;
+
+    try {
+      setChapterStatus(`${bvid}\n正在读取视频信息……`);
+      const video = await fetchVideoDetail(bvid);
+      const pageNo = Math.min(getCurrentVideoPageNo(), Math.max(1, video.pages?.length || 1));
+      const pageInfo = video.pages?.find((p) => Number(p.page) === pageNo) || video.pages?.[pageNo - 1] || {
+        cid: video.cid,
+        page: 1,
+        part: video.title,
+      };
+
+      if (!pageInfo?.cid) throw new Error('没有找到当前分 P 的 CID。');
+
+      setChapterStatus(`${bvid} · P${pageNo}\n正在读取章节信息……`);
+      const player = await fetchPlayerInfo(bvid, pageInfo.cid);
+      const points = Array.isArray(player.view_points) ? player.view_points : [];
+      const rows = points.map((point, i) => normalizeChapter(point, i + 1));
+
+      const currentKey = `${bvid}:p${pageNo}`;
+      lastVideoKey = currentKey;
+      chapterRows = rows;
+      chapterContext = {
+        bvid,
+        aid: video.aid,
+        cid: pageInfo.cid,
+        title: video.title || document.title,
+        pageNo,
+        pageCount: video.pages?.length || 1,
+        partTitle: pageInfo.part || '',
+        source: location.href,
+      };
+
+      if (!rows.length) {
+        setChapterStatus(`${bvid} · P${pageNo}\n当前视频没有返回章节/看点信息。`);
+        return;
+      }
+
+      setChapterStatus(`获取完成：${rows.length} 个章节。\n可点击“再次查看”重复打开，无需重新请求。`);
+      if (viewBtn) viewBtn.disabled = false;
+      showChapterDialog(chapterRows, chapterContext);
+    } catch (err) {
+      console.error('[Bilibili章节导出]', err);
+      setChapterStatus(`失败：${err?.message || err}`);
+    } finally {
+      if (fetchBtn) fetchBtn.disabled = false;
+    }
+  }
+
+  function ensureChapterUiForCurrentPage() {
+    const bvid = getBvidFromUrl();
+    if (!bvid) return;
+
+    createChapterUi();
+
+    const key = `${bvid}:p${getCurrentVideoPageNo()}`;
+    if (lastVideoKey && key !== lastVideoKey) {
+      chapterRows = [];
+      chapterContext = null;
+      lastVideoKey = null;
+      const viewBtn = document.querySelector('#bili-chapter-exporter .bae-view-chapter');
+      if (viewBtn) viewBtn.disabled = true;
+      setChapterStatus('检测到视频/分 P 已变化，请重新获取章节。');
+    }
+  }
+
   function ensureUiForCurrentPage() {
     const uid = getUidFromUrl();
     if (!uid) return;
@@ -672,5 +1051,9 @@
   }
 
   ensureUiForCurrentPage();
-  setInterval(ensureUiForCurrentPage, 1500);
+  ensureChapterUiForCurrentPage();
+  setInterval(() => {
+    ensureUiForCurrentPage();
+    ensureChapterUiForCurrentPage();
+  }, 1500);
 })();
