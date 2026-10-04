@@ -5,8 +5,8 @@
 | 入口 | 状态 |
 | --- | --- |
 | GitHub 安装地址 | https://raw.githubusercontent.com/shandianchengzi/bilibili-analyze/main/bilibili_space_video_exporter.user.js |
-| Greasy Fork 脚本页面 | 待作者发布后回填，不用搜索页冒充发布链接 |
-| CSDN 更多介绍 | 待作者发布后回填，正文见 docs/CSDN.md |
+| Greasy Fork 脚本页面 | [脚本发布页](https://greasyfork.org/zh-CN/scripts/598715-bilibili-%E6%8A%95%E7%A8%BF%E4%B8%8E%E8%A7%86%E9%A2%91%E7%AB%A0%E8%8A%82%E5%AF%BC%E5%87%BA) |
+| CSDN 更多介绍 | [CSDN 文章](https://shandianchengzi.blog.csdn.net/article/details/167085231)，正文见 docs/CSDN.md |
 
 ## 第一次发布
 

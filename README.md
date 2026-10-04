@@ -31,8 +31,8 @@
 ## 安装与发布入口
 
 - [直接安装 GitHub 上的脚本](https://raw.githubusercontent.com/shandianchengzi/bilibili-analyze/main/bilibili_space_video_exporter.user.js)
-- **Greasy Fork 发布链接：待作者发布后补充。** 发布准备见 [PUBLISHING.md](./PUBLISHING.md#发布链接)。
-- **CSDN 更多介绍链接：待作者发布后补充。** 可先阅读[完整介绍 Markdown](./docs/CSDN.md)。
+- [Greasy Fork：安装油猴脚本](https://greasyfork.org/zh-CN/scripts/598715-bilibili-%E6%8A%95%E7%A8%BF%E4%B8%8E%E8%A7%86%E9%A2%91%E7%AB%A0%E8%8A%82%E5%AF%BC%E5%87%BA)
+- [CSDN：更详细的介绍](https://shandianchengzi.blog.csdn.net/article/details/167085231)（[仓库 Markdown](./docs/CSDN.md)）
 
 1. 浏览器安装 Tampermonkey 或 Violentmonkey。
 2. 点击上面的直接安装链接，在扩展安装页确认安装；也可新建脚本并粘贴完整源码。
@@ -89,7 +89,7 @@
 | bilibili_space_video_exporter.user.js | 唯一发布源码，无需构建 |
 | LICENSE | MIT 协议 |
 | README.md / README_EN.md | 中文 / 英文使用说明 |
-| PUBLISHING.md | 发布流程、待回填链接、验证范围 |
+| PUBLISHING.md | 发布流程、正式发布链接、验证范围 |
 | docs/greasyfork-info.txt | 发布基本信息 |
 | docs/GREASYFORK.md | Greasy Fork 详细介绍 |
 | docs/CSDN.md | 可复制的博客正文 |

@@ -10,11 +10,13 @@
 
 GitHub：https://github.com/shandianchengzi/bilibili-analyze
 
-Greasy Fork：待发布后补充脚本页面地址。
+Greasy Fork：[Bilibili 投稿与视频章节导出](https://greasyfork.org/zh-CN/scripts/598715-bilibili-%E6%8A%95%E7%A8%BF%E4%B8%8E%E8%A7%86%E9%A2%91%E7%AB%A0%E8%8A%82%E5%AF%BC%E5%87%BA)
+
+CSDN：[已发布文章](https://shandianchengzi.blog.csdn.net/article/details/167085231)
 
 先给浏览器安装 Tampermonkey 或 Violentmonkey，然后安装本项目的 `bilibili_space_video_exporter.user.js`。脚本是单文件，不需要搭建服务或填写 API Key。
 
-发布准备阶段可以在 GitHub 中打开脚本、点击 Raw 安装，或者新建油猴脚本并粘贴完整源码。正式发布后可使用 Greasy Fork 的安装入口。
+打开上面的 Greasy Fork 脚本页面，点击安装按钮并在油猴扩展中确认安装。
 
 ## 二、功能特点
 

@@ -22,4 +22,6 @@
 脚本使用当前浏览器登录态，不向作者上传 Cookie 或结果。CryptoJS 依赖从 cdnjs 加载，预览图片按 B 站返回的 URL 加载。
 
 源码、说明和反馈：https://github.com/shandianchengzi/bilibili-analyze
+
+[CSDN 更多介绍](https://shandianchengzi.blog.csdn.net/article/details/167085231)
 协议：MIT

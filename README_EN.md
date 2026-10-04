@@ -16,8 +16,8 @@ A single-file userscript for exporting public uploads and video chapters to JSON
 
 Install Tampermonkey or Violentmonkey, then [install the userscript](https://raw.githubusercontent.com/shandianchengzi/bilibili-analyze/main/bilibili_space_video_exporter.user.js). Sign in to Bilibili and open a space or BV video page.
 
-Greasy Fork URL: pending author publication.
-CSDN article URL: pending author publication. See [the prepared article](./docs/CSDN.md).
+[Install on Greasy Fork](https://greasyfork.org/zh-CN/scripts/598715-bilibili-%E6%8A%95%E7%A8%BF%E4%B8%8E%E8%A7%86%E9%A2%91%E7%AB%A0%E8%8A%82%E5%AF%BC%E5%87%BA).
+[Read the CSDN article (Chinese)](https://shandianchengzi.blog.csdn.net/article/details/167085231). See also [the Markdown source](./docs/CSDN.md).
 
 ## Usage
 
