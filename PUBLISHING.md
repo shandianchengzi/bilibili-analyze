@@ -30,4 +30,4 @@
 
 ## 图片
 
-docs/images/*.png 是按源码布局制作的示意图，图片内和文档均注明演示数据。博客使用同仓库的 raw.githubusercontent.com 绝对链接，不嵌入 base64 或第三方图床。
+docs/images/uploads-demo.png 和 docs/images/chapters-demo.png 已替换为作者实际使用脚本时截取的 B 站页面截图，分别展示投稿筛选和章节导出。文件名沿用原路径，便于保持已有图片链接有效。博客使用同仓库的 raw.githubusercontent.com 绝对链接，不嵌入 base64 或第三方图床。

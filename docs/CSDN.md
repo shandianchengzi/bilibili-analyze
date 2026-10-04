@@ -28,11 +28,11 @@ Greasy Fork：待发布后补充脚本页面地址。
 
 ## 三、使用效果
 
-下面两张图片是依据脚本布局制作的功能示意图，使用演示数据，用来说明操作，不是真实网页截图或 UP 主统计。
+下面两张截图来自我实际使用脚本时的 B 站页面，分别展示投稿筛选和视频章节导出的效果。
 
 ### 1. 投稿筛选
 
-![投稿筛选界面：演示数据](https://raw.githubusercontent.com/shandianchengzi/bilibili-analyze/main/docs/images/uploads-demo.png)
+![投稿筛选实际使用截图](https://raw.githubusercontent.com/shandianchengzi/bilibili-analyze/main/docs/images/uploads-demo.png)
 
 打开 UP 主空间页面，点击右下角的“获取投稿列表”。读取完成后弹出选择窗口，默认勾选未加入合集的视频。
 
@@ -42,7 +42,7 @@ Greasy Fork：待发布后补充脚本页面地址。
 
 ### 2. 视频章节
 
-![视频章节导出界面：演示数据](https://raw.githubusercontent.com/shandianchengzi/bilibili-analyze/main/docs/images/chapters-demo.png)
+![视频章节导出实际使用截图](https://raw.githubusercontent.com/shandianchengzi/bilibili-analyze/main/docs/images/chapters-demo.png)
 
 进入普通 BV 视频播放页，点击“获取章节”。弹窗会显示章节标题、起止时间和图片。
 

@@ -29,7 +29,7 @@ On `https://www.bilibili.com/video/<BVID>?p=N`, click 获取章节 (fetch chapte
 
 ## Screenshots
 
-Illustrations based on the script layout with demo data; these are not browser screenshots or live Bilibili results.
+Screenshots captured by the author while using the script on Bilibili, showing upload selection and video chapter export.
 
 ![Upload selection](docs/images/uploads-demo.png)
 ![Video chapters](docs/images/chapters-demo.png)
