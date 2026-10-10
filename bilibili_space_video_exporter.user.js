@@ -1162,7 +1162,22 @@
     if (viewBtn) viewBtn.disabled = true;
 
     try {
-      setChapterStatus(`${bvid}\n正在读取视频信息……`);
+      setChapterStatus(`${bvid}\n正在验证当前 B 站登录态……`);
+      let loginState = null;
+      try {
+        loginState = await getBilibiliLoginState();
+        if (loginState.isLogin) {
+          setChapterStatus(
+            `${bvid}\n已登录：${loginState.uname || loginState.mid}（UID ${loginState.mid}）\n正在读取视频信息……`
+          );
+        } else {
+          setChapterStatus(`${bvid}\n当前请求未识别到 B 站登录态，仍尝试读取视频信息……`);
+        }
+      } catch (err) {
+        console.warn('[Bilibili章节导出] 登录态检查失败：', err);
+        setChapterStatus(`${bvid}\n登录态检查失败，仍尝试读取视频信息……`);
+      }
+
       const video = await fetchVideoDetail(bvid);
       const pageNo = Math.min(getCurrentVideoPageNo(), Math.max(1, video.pages?.length || 1));
       const pageInfo = video.pages?.find((p) => Number(p.page) === pageNo) || video.pages?.[pageNo - 1] || {
@@ -1173,7 +1188,9 @@
 
       if (!pageInfo?.cid) throw new Error('没有找到当前分 P 的 CID。');
 
-      setChapterStatus(`${bvid} · P${pageNo}\n正在读取章节信息……`);
+      setChapterStatus(
+        `${bvid} · P${pageNo}\n视频详情来源：${video._detail_source || 'unknown'}\n正在读取章节信息……`
+      );
       const player = await fetchPlayerInfo(bvid, pageInfo.cid, video.aid);
       const points = Array.isArray(player.view_points) ? player.view_points : [];
       const rows = points.map((point, i) => normalizeChapter(point, i + 1));
@@ -1190,14 +1207,22 @@
         pageCount: video.pages?.length || 1,
         partTitle: pageInfo.part || '',
         source: location.href,
+        detailSource: video._detail_source || '',
+        loginMid: Number(player.login_mid || (loginState && loginState.mid) || 0),
+        isOwner: Boolean(player.is_owner),
       };
 
       if (!rows.length) {
-        setChapterStatus(`${bvid} · P${pageNo}\n当前视频没有返回章节/看点信息。`);
+        setChapterStatus(
+          `${bvid} · P${pageNo}\n当前视频没有返回章节/看点信息。\n登录 UID：${player.login_mid || (loginState && loginState.mid) || '未知'} · is_owner=${Boolean(player.is_owner)}`
+        );
         return;
       }
 
-      setChapterStatus(`获取完成：${rows.length} 个章节。\n可点击“再次查看”重复打开，无需重新请求。`);
+      const ownerText = player.is_owner ? ' · 已确认作者身份' : '';
+      setChapterStatus(
+        `获取完成：${rows.length} 个章节${ownerText}。\n登录 UID：${player.login_mid || (loginState && loginState.mid) || '未知'}\n可点击“再次查看”重复打开，无需重新请求。`
+      );
       if (viewBtn) viewBtn.disabled = false;
       showChapterDialog(chapterRows, chapterContext);
     } catch (err) {
