@@ -779,27 +779,145 @@
     ].join('\r\n');
   }
 
-  async function fetchVideoDetail(bvid) {
-    const json = await apiFetch('/x/web-interface/view', { bvid });
-    if (json.code !== 0 || !json.data) {
-      throw new Error(`获取视频信息失败：${json.code} ${json.message || ''}`);
-    }
-    return json.data;
+  function normalizeCreatorVideoDetail(data, bvid) {
+    const archive = (data && (data.archive || data.Archive)) || {};
+    const rawVideos = Array.isArray(data && data.videos) ? data.videos : [];
+    const pages = rawVideos.map((v, i) => ({
+      cid: Number(v.cid || v.id || 0),
+      page: i + 1,
+      part: v.title || v.part || ('P' + (i + 1)),
+      duration: Number(v.duration || 0),
+      raw: v,
+    })).filter((p) => p.cid);
+
+    const aid = Number(archive.aid || (data && data.aid) || 0);
+    const normalizedBvid = archive.bvid || (data && data.bvid) || bvid;
+    if (!aid && !pages.length) return null;
+
+    return {
+      ...archive,
+      aid,
+      bvid: normalizedBvid,
+      title: archive.title || (data && data.title) || document.title.replace(/_哔哩哔哩_bilibili.*$/i, ''),
+      cid: (pages[0] && pages[0].cid) || Number((data && data.cid) || 0),
+      pages,
+      _detail_source: 'creator-center',
+      _creator_raw: data,
+    };
   }
 
-  async function fetchPlayerInfo(bvid, cid) {
-    let json = await apiFetch('/x/player/v2', { bvid, cid });
+  function getPageEmbeddedVideoDetail(bvid) {
+    try {
+      const state = pageWindow && pageWindow.__INITIAL_STATE__;
+      const candidates = [
+        state && state.videoData,
+        state && state.videoInfo,
+        state && state.videoData && state.videoData.View,
+        state && state.videoInfo && state.videoInfo.view,
+      ].filter(Boolean);
 
-    if (json.code !== 0) {
-      const { imgKey, subKey } = await getWbiKeys();
-      const query = signWbi({ bvid, cid }, imgKey, subKey);
-      json = await apiFetch(`/x/player/wbi/v2?${query}`);
+      for (const v of candidates) {
+        const candidateBvid = v.bvid || (v.View && v.View.bvid) || '';
+        if (candidateBvid && candidateBvid.toLowerCase() !== bvid.toLowerCase()) continue;
+
+        const rawPages = Array.isArray(v.pages)
+          ? v.pages
+          : (v.View && Array.isArray(v.View.pages) ? v.View.pages : []);
+
+        const pages = rawPages.map((p, i) => ({
+          ...p,
+          cid: Number(p.cid || 0),
+          page: Number(p.page || i + 1),
+          part: p.part || p.title || ('P' + (i + 1)),
+        })).filter((p) => p.cid);
+
+        const aid = Number(v.aid || (v.View && v.View.aid) || 0);
+        const cid = Number(v.cid || (v.View && v.View.cid) || (pages[0] && pages[0].cid) || 0);
+        if (!aid && !cid && !pages.length) continue;
+
+        return {
+          ...v,
+          aid,
+          bvid: candidateBvid || bvid,
+          cid,
+          title: v.title || (v.View && v.View.title) || document.title.replace(/_哔哩哔哩_bilibili.*$/i, ''),
+          pages: pages.length ? pages : (cid ? [{ cid, page: 1, part: v.title || 'P1' }] : []),
+          _detail_source: 'page-state',
+        };
+      }
+    } catch (err) {
+      console.warn('[Bilibili章节导出] 读取页面内嵌视频状态失败：', err);
+    }
+    return null;
+  }
+
+  async function fetchVideoDetail(bvid) {
+    let publicError = null;
+
+    try {
+      const json = await apiFetch('/x/web-interface/view', { bvid });
+      if (json.code === 0 && json.data) {
+        return { ...json.data, _detail_source: 'public-api' };
+      }
+      publicError = new Error('公开详情接口：' + json.code + ' ' + (json.message || ''));
+    } catch (err) {
+      publicError = err;
     }
 
-    if (json.code !== 0 || !json.data) {
-      throw new Error(`获取播放器章节失败：${json.code} ${json.message || ''}`);
+    try {
+      const creatorJson = await memberApiFetch('/x/vupre/web/archive/view', {
+        topic_grey: 1,
+        bvid,
+        t: Date.now(),
+      });
+      if (creatorJson.code === 0 && creatorJson.data) {
+        const normalized = normalizeCreatorVideoDetail(creatorJson.data, bvid);
+        if (normalized) return normalized;
+      }
+      console.warn('[Bilibili章节导出] 创作中心详情接口未返回有效稿件：', creatorJson);
+    } catch (err) {
+      console.warn('[Bilibili章节导出] 创作中心详情接口失败：', err);
     }
-    return json.data;
+
+    const embedded = getPageEmbeddedVideoDetail(bvid);
+    if (embedded) return embedded;
+
+    throw new Error(
+      '无法取得视频详情。公开接口失败：' +
+      ((publicError && publicError.message) || publicError || '未知错误') +
+      '。如果这是仅自己可见稿件，请确认当前浏览器已登录该视频的投稿账号。'
+    );
+  }
+
+  async function fetchPlayerInfo(bvid, cid, aid = 0) {
+    const attempts = [
+      bvid ? { bvid, cid } : null,
+      aid ? { aid, cid } : null,
+    ].filter(Boolean);
+
+    let lastJson = null;
+
+    for (const params of attempts) {
+      let json = await apiFetch('/x/player/v2', params);
+      lastJson = json;
+      if (json.code === 0 && json.data) return json.data;
+
+      try {
+        const keys = await getWbiKeys();
+        const query = signWbi(params, keys.imgKey, keys.subKey);
+        json = await apiFetch('/x/player/wbi/v2?' + query);
+        lastJson = json;
+        if (json.code === 0 && json.data) return json.data;
+      } catch (err) {
+        console.warn('[Bilibili章节导出] WBI 播放器接口失败：', err);
+      }
+    }
+
+    throw new Error(
+      ('获取播放器章节失败：' +
+      (lastJson && lastJson.code !== undefined ? lastJson.code : 'unknown') + ' ' +
+      ((lastJson && lastJson.message) || '')).trim()
+    );
   }
 
   function normalizeChapter(point, index) {
@@ -1056,7 +1174,7 @@
       if (!pageInfo?.cid) throw new Error('没有找到当前分 P 的 CID。');
 
       setChapterStatus(`${bvid} · P${pageNo}\n正在读取章节信息……`);
-      const player = await fetchPlayerInfo(bvid, pageInfo.cid);
+      const player = await fetchPlayerInfo(bvid, pageInfo.cid, video.aid);
       const points = Array.isArray(player.view_points) ? player.view_points : [];
       const rows = points.map((point, i) => normalizeChapter(point, i + 1));
 
