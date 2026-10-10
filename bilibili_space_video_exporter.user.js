@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili 投稿与视频章节导出
 // @namespace    https://github.com/shandianchengzi/bilibili-analyze
-// @version      1.2.1
+// @version      1.3.0
 // @description  获取B站UP主公开投稿并筛选导出；在视频播放页获取并导出章节/看点信息。
 // @author       shandianchengzi
 // @license      MIT
@@ -13,6 +13,10 @@
 // @match        https://www.bilibili.com/video/*
 // @require      https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js
 // @grant        GM_download
+// @grant        GM_xmlhttpRequest
+// @grant        unsafeWindow
+// @connect      api.bilibili.com
+// @connect      member.bilibili.com
 // @run-at       document-idle
 // @noframes
 // ==/UserScript==
@@ -21,6 +25,8 @@
   'use strict';
 
   const API_BASE = 'https://api.bilibili.com';
+  const MEMBER_API_BASE = 'https://member.bilibili.com';
+  const pageWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const PAGE_SIZE = 50;
   const PAGE_DELAY_MS = 650;
   const MIXIN_KEY_ENC_TAB = [
@@ -149,6 +155,49 @@
     return '\ufeff' + lines.join('\r\n');
   }
 
+  async function pageFetchJson(url) {
+    const fetchImpl = pageWindow && pageWindow.fetch;
+    if (typeof fetchImpl !== 'function') throw new Error('无法访问页面 fetch，不能复用当前 B 站登录态。');
+
+    const response = await fetchImpl.call(pageWindow, url, {
+      method: 'GET',
+      credentials: 'include',
+      mode: 'cors',
+      headers: { Accept: 'application/json, text/plain, */*' },
+      referrer: location.href,
+      referrerPolicy: 'strict-origin-when-cross-origin',
+    });
+
+    if (!response.ok) throw new Error('HTTP ' + response.status + ' ' + response.statusText);
+    return JSON.parse(await response.text());
+  }
+
+  function gmFetchJson(url) {
+    return new Promise((resolve, reject) => {
+      if (typeof GM_xmlhttpRequest !== 'function') {
+        reject(new Error('GM_xmlhttpRequest 不可用。'));
+        return;
+      }
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url,
+        anonymous: false,
+        headers: { Accept: 'application/json, text/plain, */*', Referer: location.href },
+        timeout: 20000,
+        onload: (response) => {
+          if (response.status < 200 || response.status >= 300) {
+            reject(new Error(('HTTP ' + response.status + ' ' + (response.statusText || '')).trim()));
+            return;
+          }
+          try { resolve(JSON.parse(response.responseText)); }
+          catch (err) { reject(new Error('响应不是合法 JSON：' + (err && err.message ? err.message : err))); }
+        },
+        ontimeout: () => reject(new Error('请求超时。')),
+        onerror: (err) => reject(new Error('请求失败：' + ((err && (err.error || err.message)) || '未知错误'))),
+      });
+    });
+  }
+
   async function apiFetch(path, params = null) {
     const url = new URL(API_BASE + path);
     if (params) {
@@ -156,23 +205,33 @@
         if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
       }
     }
-
-    const response = await fetch(url.toString(), {
-      method: 'GET',
-      credentials: 'include',
-      mode: 'cors',
-      headers: {
-        Accept: 'application/json, text/plain, */*',
-      },
-      referrer: location.href,
-      referrerPolicy: 'strict-origin-when-cross-origin',
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} ${response.statusText}`);
+    try {
+      return await pageFetchJson(url.toString());
+    } catch (pageErr) {
+      console.warn('[Bilibili API] 页面 fetch 失败，尝试 GM_xmlhttpRequest：', pageErr);
+      return gmFetchJson(url.toString());
     }
-    const json = await response.json();
-    return json;
+  }
+
+  async function memberApiFetch(path, params = null) {
+    const url = new URL(MEMBER_API_BASE + path);
+    if (params) {
+      for (const [k, v] of Object.entries(params)) {
+        if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
+      }
+    }
+    return gmFetchJson(url.toString());
+  }
+
+  async function getBilibiliLoginState() {
+    const json = await apiFetch('/x/web-interface/nav');
+    const data = (json && json.data) || {};
+    return {
+      code: json && json.code,
+      isLogin: Boolean(data.isLogin),
+      mid: Number(data.mid || 0),
+      uname: data.uname || '',
+    };
   }
 
   function getMixinKey(orig) {
