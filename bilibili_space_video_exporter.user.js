@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Bilibili 投稿与视频章节导出
 // @namespace    https://github.com/shandianchengzi/bilibili-analyze
-// @version      1.3.0
-// @description  获取B站UP主公开投稿并筛选导出；在视频播放页获取并导出章节/看点信息。
+// @version      1.4.0
+// @description  获取UP主公开投稿；在视频播放页获取全部分P标题以及当前P内的章节/看点。
 // @author       shandianchengzi
 // @license      MIT
 // @homepageURL  https://github.com/shandianchengzi/bilibili-analyze
@@ -45,6 +45,9 @@
   let chapterRows = [];
   let chapterContext = null;
   let lastVideoKey = null;
+  let partRows = [];
+  let partContext = null;
+  let lastPartBvid = null;
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -920,6 +923,255 @@
     );
   }
 
+
+  function secondsOfDuration(value) {
+    if (typeof value === 'number') return Number.isFinite(value) ? Math.max(0, value) : null;
+    if (typeof value === 'string' && /^\d+(?::\d{1,2}){1,2}$/.test(value)) {
+      return value.split(':').reduce((sum, value) => sum * 60 + Number(value), 0);
+    }
+    if (value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value))) {
+      return Math.max(0, Number(value));
+    }
+    return null;
+  }
+
+  function normalizeVideoParts(video, bvid) {
+    const pages = Array.isArray(video.pages) && video.pages.length
+      ? video.pages
+      : (video.cid ? [{ cid: video.cid, page: 1, part: video.title, duration: video.duration }] : []);
+
+    return pages.map((item, i) => {
+      const page = Number(item.page || i + 1);
+      const durationSeconds = secondsOfDuration(item.duration);
+      return {
+        page,
+        title: String(item.part || item.title || ('P' + page)),
+        cid: Number(item.cid || 0),
+        duration_seconds: durationSeconds,
+        duration: durationSeconds === null ? '' : formatClock(durationSeconds),
+        url: 'https://www.bilibili.com/video/' + bvid + '?p=' + page,
+      };
+    });
+  }
+
+  function setPartCache(video, bvid) {
+    const rows = normalizeVideoParts(video, bvid);
+    if (!rows.length || !rows.some((row) => row.title)) return false;
+
+    partRows = rows;
+    partContext = {
+      bvid,
+      aid: video.aid || 0,
+      title: video.title || document.title,
+      source: location.href,
+      detail_source: video._detail_source || '',
+    };
+    lastPartBvid = bvid;
+
+    const viewBtn = document.querySelector('#bili-chapter-exporter .bae-view-parts');
+    if (viewBtn) viewBtn.disabled = false;
+    return true;
+  }
+
+  async function fetchPreferredPartDetail(bvid) {
+    // 作者态返回完整的 videos[]，包括仅自己可见稿件的分 P 标题。
+    try {
+      const json = await memberApiFetch('/x/vupre/web/archive/view', {
+        topic_grey: 1, bvid, t: Date.now(),
+      });
+      if (json.code === 0 && json.data) {
+        const video = normalizeCreatorVideoDetail(json.data, bvid);
+        if (video && video.pages.length) return video;
+
+        // 少数作者态详情不带 videos[] 时，补查稿件分 P 列表。
+        if (video && video.aid) {
+          const fallback = await memberApiFetch('/x/web/archive/videos', { aid: video.aid });
+          if (fallback.code === 0 && fallback.data) {
+            const merged = normalizeCreatorVideoDetail({
+              archive: { ...video, aid: video.aid },
+              videos: fallback.data.videos || [],
+            }, bvid);
+            if (merged && merged.pages.length) return merged;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[Bilibili分P导出] 作者态详情失败，尝试公开视频详情：', err);
+    }
+
+    return fetchVideoDetail(bvid);
+  }
+
+  function partCsv(rows) {
+    const lines = [['分P序号','分P标题','CID','时长','时长秒数','视频链接']];
+    rows.forEach((row) => lines.push([
+      row.page, row.title, row.cid, row.duration,
+      row.duration_seconds == null ? '' : row.duration_seconds, row.url,
+    ]));
+    const esc = (cell) => '"' + String(cell == null ? '' : cell).replace(/"/g, '""') + '"';
+    return '\ufeff' + lines.map((row) => row.map(esc).join(',')).join('\r\n');
+  }
+
+  function closePartDialog() {
+    document.getElementById('bae-parts-overlay')?.remove();
+  }
+
+  function showPartDialog() {
+    if (!partRows.length || !partContext || lastPartBvid !== getBvidFromUrl()) {
+      setChapterStatus('还没有获取当前视频的分 P 列表，请先点击“获取分P”。');
+      return;
+    }
+    closePartDialog();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'bae-parts-overlay';
+    overlay.innerHTML = `
+      <div class="bae-parts-modal">
+        <div class="bae-parts-head">
+          <div>
+            <div class="bae-parts-title">全部分 P 标题（${partRows.length}）</div>
+            <div class="bae-parts-subtitle">${escapeHtml(partContext.title)} · ${escapeHtml(partContext.bvid)} · ${escapeHtml(partContext.detail_source)}</div>
+          </div>
+          <button class="bae-parts-close" type="button" title="关闭">×</button>
+        </div>
+        <div class="bae-parts-list">
+          ${partRows.map((row) => `
+            <div class="bae-parts-row">
+              <span class="bae-parts-number">P${row.page}</span>
+              <div class="bae-parts-main">
+                <a href="${escapeHtml(row.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(row.title)}</a>
+                <div class="bae-parts-meta">CID: ${row.cid || '未知'}${row.duration ? ' · ' + row.duration : ''}</div>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+        <div class="bae-parts-actions">
+          <button type="button" class="bae-parts-copy">复制分 P 标题</button>
+          <button type="button" class="bae-parts-json">导出 JSON</button>
+          <button type="button" class="bae-parts-csv">导出 CSV</button>
+          <button type="button" class="bae-parts-dismiss">关闭</button>
+        </div>
+      </div>
+    `;
+
+    overlay.style.cssText = [
+      'position:fixed','inset:0','z-index:2147483647','display:flex',
+      'align-items:center','justify-content:center','background:rgba(0,0,0,.48)',
+      'padding:20px','box-sizing:border-box',
+      'font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif',
+    ].join(';');
+
+    const style = document.createElement('style');
+    style.textContent = `
+      #bae-parts-overlay .bae-parts-modal {
+        width:min(840px,96vw);height:min(750px,92vh);display:flex;flex-direction:column;
+        background:#fff;color:#18191c;border-radius:12px;overflow:hidden;
+        box-shadow:0 12px 42px rgba(0,0,0,.28)
+      }
+      #bae-parts-overlay .bae-parts-head {
+        display:flex;align-items:flex-start;justify-content:space-between;
+        gap:16px;padding:18px 20px;border-bottom:1px solid #e3e5e7
+      }
+      #bae-parts-overlay .bae-parts-title { font-size:18px;font-weight:700 }
+      #bae-parts-overlay .bae-parts-subtitle { margin-top:5px;color:#61666d;overflow-wrap:anywhere }
+      #bae-parts-overlay .bae-parts-list { flex:1;overflow:auto }
+      #bae-parts-overlay .bae-parts-row {
+        display:flex;align-items:center;gap:16px;padding:12px 20px;
+        border-bottom:1px solid #f1f2f3
+      }
+      #bae-parts-overlay .bae-parts-row:hover { background:#f7f8f9 }
+      #bae-parts-overlay .bae-parts-number { flex:none;width:48px;font-weight:700;color:#00aeec }
+      #bae-parts-overlay .bae-parts-main { min-width:0 }
+      #bae-parts-overlay .bae-parts-main a { color:#18191c;font-weight:600;text-decoration:none }
+      #bae-parts-overlay .bae-parts-main a:hover { color:#00aeec }
+      #bae-parts-overlay .bae-parts-meta { color:#9499a0;font-size:12px;margin-top:4px }
+      #bae-parts-overlay .bae-parts-actions {
+        display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px;
+        padding:13px 20px;border-top:1px solid #e3e5e7
+      }
+      #bae-parts-overlay button {
+        border:1px solid #c9ccd0;border-radius:6px;padding:7px 11px;
+        background:#fff;color:#18191c;cursor:pointer;font-size:13px
+      }
+      #bae-parts-overlay .bae-parts-close {
+        border:0;font-size:26px;line-height:1;color:#9499a0;padding:0
+      }
+      #bae-parts-overlay .bae-parts-json, #bae-parts-overlay .bae-parts-csv {
+        background:#00aeec;color:#fff;border-color:#00aeec
+      }
+    `;
+    overlay.appendChild(style);
+    document.body.appendChild(overlay);
+
+    const close = () => closePartDialog();
+    overlay.querySelector('.bae-parts-close').addEventListener('click', close);
+    overlay.querySelector('.bae-parts-dismiss').addEventListener('click', close);
+
+    overlay.querySelector('.bae-parts-copy').addEventListener('click', async (event) => {
+      const plain = partRows.map((row) => 'P' + row.page + ' ' + row.title).join('\n');
+      const btn = event.currentTarget;
+      try {
+        await navigator.clipboard.writeText(plain);
+      } catch (_) {
+        const textarea = document.createElement('textarea');
+        textarea.value = plain;
+        textarea.style.cssText = 'position:fixed;opacity:0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        const ok = document.execCommand('copy');
+        textarea.remove();
+        if (!ok) {
+          setChapterStatus('复制失败，请检查浏览器剪贴板权限。');
+          return;
+        }
+      }
+      btn.textContent = '已复制';
+    });
+
+    const base = safeFilename(partContext.title + '_' + partContext.bvid + '_分P列表');
+    const jsonOutput = () => ({
+      exported_at: new Date().toISOString(),
+      bvid: partContext.bvid,
+      aid: partContext.aid,
+      title: partContext.title,
+      detail_source: partContext.detail_source,
+      part_count: partRows.length,
+      parts: partRows,
+    });
+    overlay.querySelector('.bae-parts-json').addEventListener('click', async () => {
+      await downloadBlob(base + '.json', JSON.stringify(jsonOutput(), null, 2), 'application/json;charset=utf-8');
+      setChapterStatus('已导出全部 ' + partRows.length + ' 个分 P 的 JSON。');
+    });
+    overlay.querySelector('.bae-parts-csv').addEventListener('click', async () => {
+      await downloadBlob(base + '.csv', partCsv(partRows), 'text/csv;charset=utf-8');
+      setChapterStatus('已导出全部 ' + partRows.length + ' 个分 P 的 CSV。');
+    });
+  }
+
+  async function fetchCurrentVideoParts() {
+    const bvid = getBvidFromUrl();
+    if (!bvid) {
+      setChapterStatus('没有从当前地址识别到 BV 号。');
+      return;
+    }
+    const fetchBtn = document.querySelector('#bili-chapter-exporter .bae-fetch-parts');
+    if (fetchBtn) fetchBtn.disabled = true;
+
+    try {
+      setChapterStatus(bvid + '\n正在获取完整分 P 列表及标题……');
+      const video = await fetchPreferredPartDetail(bvid);
+      if (getBvidFromUrl() !== bvid) return;
+      if (!setPartCache(video, bvid)) throw new Error('稿件详情中没有可用的分 P 信息。');
+      setChapterStatus('获取完成：共 ' + partRows.length + ' 个分 P，已读取标题。\n点击“查看分P”可反复预览、复制、导出，无需重新请求。');
+      showPartDialog();
+    } catch (err) {
+      console.error('[Bilibili分P导出]', err);
+      setChapterStatus('分 P 获取失败：' + (err?.message || err));
+    } finally {
+      if (fetchBtn) fetchBtn.disabled = false;
+    }
+  }
+
   function normalizeChapter(point, index) {
     const from = Number(point.from || 0);
     const to = Number(point.to || 0);
@@ -1109,11 +1361,15 @@
     const root = document.createElement('div');
     root.id = 'bili-chapter-exporter';
     root.innerHTML = `
-      <div class="bae-chapter-panel-title">视频章节导出</div>
-      <div class="bae-chapter-status">等待获取当前视频章节</div>
+      <div class="bae-chapter-panel-title">视频分 P / 章节导出</div>
+      <div class="bae-chapter-status">分 P 标题和播放器章节是两种不同的信息。</div>
+      <div class="bae-chapter-actions">
+        <button class="bae-fetch-parts">获取分P</button>
+        <button class="bae-view-parts" disabled>查看分P</button>
+      </div>
       <div class="bae-chapter-actions">
         <button class="bae-fetch-chapter">获取章节</button>
-        <button class="bae-view-chapter" disabled>再次查看</button>
+        <button class="bae-view-chapter" disabled>再次查看章节</button>
       </div>
     `;
 
@@ -1143,6 +1399,8 @@
     document.documentElement.appendChild(style);
     document.body.appendChild(root);
 
+    root.querySelector('.bae-fetch-parts').addEventListener('click', fetchCurrentVideoParts);
+    root.querySelector('.bae-view-parts').addEventListener('click', showPartDialog);
     root.querySelector('.bae-fetch-chapter').addEventListener('click', fetchCurrentVideoChapters);
     root.querySelector('.bae-view-chapter').addEventListener('click', () => {
       if (chapterRows.length && chapterContext) showChapterDialog(chapterRows, chapterContext);
@@ -1179,6 +1437,8 @@
       }
 
       const video = await fetchVideoDetail(bvid);
+      if (getBvidFromUrl() !== bvid) return;
+      setPartCache(video, bvid);
       const pageNo = Math.min(getCurrentVideoPageNo(), Math.max(1, video.pages?.length || 1));
       const pageInfo = video.pages?.find((p) => Number(p.page) === pageNo) || video.pages?.[pageNo - 1] || {
         cid: video.cid,
@@ -1214,7 +1474,7 @@
 
       if (!rows.length) {
         setChapterStatus(
-          `${bvid} · P${pageNo}\n当前视频没有返回章节/看点信息。\n登录 UID：${player.login_mid || (loginState && loginState.mid) || '未知'} · is_owner=${Boolean(player.is_owner)}`
+          `${bvid} · P${pageNo}\n此 P 没有返回播放器章节/看点。\n${partRows.length ? '已经取得 ' + partRows.length + ' 个分 P 的标题，可点击“查看分P”。' : '可以另行点击“获取分P”读取分 P 标题。'}\n登录 UID：${player.login_mid || (loginState && loginState.mid) || '未知'} · is_owner=${Boolean(player.is_owner)}`
         );
         return;
       }
@@ -1239,14 +1499,23 @@
 
     createChapterUi();
 
-    const key = `${bvid}:p${getCurrentVideoPageNo()}`;
+    if (lastPartBvid && lastPartBvid !== bvid) {
+      partRows = [];
+      partContext = null;
+      lastPartBvid = null;
+      closePartDialog();
+      const partButton = document.querySelector('#bili-chapter-exporter .bae-view-parts');
+      if (partButton) partButton.disabled = true;
+    }
+
+    const key = bvid + ':p' + getCurrentVideoPageNo();
     if (lastVideoKey && key !== lastVideoKey) {
       chapterRows = [];
       chapterContext = null;
       lastVideoKey = null;
       const viewBtn = document.querySelector('#bili-chapter-exporter .bae-view-chapter');
       if (viewBtn) viewBtn.disabled = true;
-      setChapterStatus('检测到视频/分 P 已变化，请重新获取章节。');
+      setChapterStatus('当前视频/分 P 已变化。分 P 列表可继续复用，章节需重新获取。');
     }
   }
 
