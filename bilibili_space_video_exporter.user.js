@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili 投稿与视频章节导出
 // @namespace    https://github.com/shandianchengzi/bilibili-analyze
-// @version      1.4.0
+// @version      1.4.1
 // @description  获取UP主公开投稿；在视频播放页获取全部分P标题以及当前P内的章节/看点。
 // @author       shandianchengzi
 // @license      MIT
@@ -330,18 +330,102 @@
     };
   }
 
+  // 共用面板折叠逻辑；状态仅保存在本浏览器当前 B 站域名下。
+  function setupPanelCollapse(root, storageKey) {
+    const toggle = root.querySelector('.bae-collapse-toggle');
+    const header = root.querySelector('.bae-panel-header');
+    if (!toggle || !header) return;
+
+    let collapsed = false;
+    try {
+      collapsed = localStorage.getItem(storageKey) === '1';
+    } catch (err) {
+      // 例如禁用站点存储时，本次仍可正常折叠。
+    }
+
+    const render = () => {
+      root.classList.toggle('bae-collapsed', collapsed);
+      toggle.textContent = collapsed ? '+' : '−';
+      toggle.setAttribute('aria-label', collapsed ? '展开工具面板' : '收起工具面板');
+      toggle.setAttribute('aria-expanded', String(!collapsed));
+      toggle.title = collapsed ? '展开工具面板' : '收起工具面板';
+    };
+
+    const setCollapsed = (next) => {
+      collapsed = next;
+      render();
+      try {
+        localStorage.setItem(storageKey, collapsed ? '1' : '0');
+      } catch (err) {
+        // 存储不可用时仅在本页面保留状态。
+      }
+    };
+
+    toggle.addEventListener('click', (event) => {
+      event.stopPropagation();
+      setCollapsed(!collapsed);
+    });
+    // 收起后可以直接点击整个小入口展开，不需要精确点击“+”。
+    header.addEventListener('click', () => {
+      if (collapsed) setCollapsed(false);
+    });
+
+    render();
+  }
+
+  function ensurePanelCollapseStyle() {
+    if (document.getElementById('bae-collapse-style')) return;
+    const style = document.createElement('style');
+    style.id = 'bae-collapse-style';
+    style.textContent = ` 
+      #bili-all-video-exporter .bae-panel-header,
+      #bili-chapter-exporter .bae-panel-header {
+        display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      }
+      #bili-all-video-exporter .bae-collapse-toggle,
+      #bili-chapter-exporter .bae-collapse-toggle {
+        flex: none; min-width: 30px; min-height: 30px; padding: 3px 7px;
+        border: 0; border-radius: 7px; background: #f1f2f3; color: #61666d;
+        cursor: pointer; font-size: 19px; line-height: 1;
+      }
+      #bili-all-video-exporter.bae-collapsed,
+      #bili-chapter-exporter.bae-collapsed {
+        width: auto; max-width: calc(100vw - 40px); padding: 6px 8px;
+        border-radius: 22px;
+      }
+      #bili-all-video-exporter.bae-collapsed .bae-panel-body,
+      #bili-chapter-exporter.bae-collapsed .bae-panel-body {
+        display: none;
+      }
+      #bili-all-video-exporter.bae-collapsed .bae-title,
+      #bili-chapter-exporter.bae-collapsed .bae-chapter-panel-title {
+        margin-bottom: 0;
+      }
+      #bili-all-video-exporter.bae-collapsed .bae-panel-header,
+      #bili-chapter-exporter.bae-collapsed .bae-panel-header {
+        cursor: pointer;
+      }
+    `; 
+    document.documentElement.appendChild(style);
+  }
+
   function createUi() {
     if (document.getElementById('bili-all-video-exporter')) return;
 
     const root = document.createElement('div');
     root.id = 'bili-all-video-exporter';
     root.innerHTML = `
-      <div class="bae-title">UP主投稿导出</div>
-      <div class="bae-status">等待开始</div>
-      <div class="bae-actions">
-        <button class="bae-start">获取投稿列表</button>
-        <button class="bae-reexport" disabled>选择并导出</button>
-        <button class="bae-cancel" disabled>停止</button>
+      <div class="bae-panel-header">
+        <div class="bae-title">UP主投稿导出</div>
+        <button type="button" class="bae-collapse-toggle" aria-label="收起工具面板">−</button>
+      </div>
+      <div class="bae-panel-body">
+        <div class="bae-status">等待开始</div>
+        <div class="bae-actions">
+          <button class="bae-start">获取投稿列表</button>
+          <button class="bae-reexport" disabled>选择并导出</button>
+          <button class="bae-cancel" disabled>停止</button>
+        </div>
       </div>
     `;
 
@@ -370,6 +454,8 @@
 
     document.documentElement.appendChild(style);
     document.body.appendChild(root);
+    ensurePanelCollapseStyle();
+    setupPanelCollapse(root, 'bili-analyze:space-panel-collapsed');
 
     root.querySelector('.bae-start').addEventListener('click', runExport);
     root.querySelector('.bae-reexport').addEventListener('click', () => {
@@ -1361,15 +1447,20 @@
     const root = document.createElement('div');
     root.id = 'bili-chapter-exporter';
     root.innerHTML = `
-      <div class="bae-chapter-panel-title">视频分 P / 章节导出</div>
-      <div class="bae-chapter-status">分 P 标题和播放器章节是两种不同的信息。</div>
-      <div class="bae-chapter-actions">
-        <button class="bae-fetch-parts">获取分P</button>
-        <button class="bae-view-parts" disabled>查看分P</button>
+      <div class="bae-panel-header">
+        <div class="bae-chapter-panel-title">视频分 P / 章节导出</div>
+        <button type="button" class="bae-collapse-toggle" aria-label="收起工具面板">−</button>
       </div>
-      <div class="bae-chapter-actions">
-        <button class="bae-fetch-chapter">获取章节</button>
-        <button class="bae-view-chapter" disabled>再次查看章节</button>
+      <div class="bae-panel-body">
+        <div class="bae-chapter-status">分 P 标题和播放器章节是两种不同的信息。</div>
+        <div class="bae-chapter-actions">
+          <button class="bae-fetch-parts">获取分P</button>
+          <button class="bae-view-parts" disabled>查看分P</button>
+        </div>
+        <div class="bae-chapter-actions">
+          <button class="bae-fetch-chapter">获取章节</button>
+          <button class="bae-view-chapter" disabled>再次查看章节</button>
+        </div>
       </div>
     `;
 
@@ -1398,6 +1489,8 @@
 
     document.documentElement.appendChild(style);
     document.body.appendChild(root);
+    ensurePanelCollapseStyle();
+    setupPanelCollapse(root, 'bili-analyze:video-panel-collapsed');
 
     root.querySelector('.bae-fetch-parts').addEventListener('click', fetchCurrentVideoParts);
     root.querySelector('.bae-view-parts').addEventListener('click', showPartDialog);
