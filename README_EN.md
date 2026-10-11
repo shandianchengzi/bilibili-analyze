@@ -10,6 +10,7 @@ A single-file userscript for exporting public uploads and video chapters to JSON
 - Preview before downloading. Filter by collection status, search titles, and select individual videos.
 - Videos without a reported collection are selected by default.
 - Reopen the selection dialog using cached data without fetching again.
+- Collapse either floating panel to a compact bottom-right tab using the minus button; click plus or the compact tab to expand. Each panel remembers its collapsed state across refreshes without losing fetched data during the current page session.
 - On BV video pages, separately fetch **all part (P1–Pn) titles/CIDs/durations** or the current part's chapter/view-point timestamps; copy or export either set as JSON / CSV. Private owner-only videos use the authenticated Creator Center endpoint where available.
 
 ## Install
