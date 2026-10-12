@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili 投稿与视频章节导出
 // @namespace    https://github.com/shandianchengzi/bilibili-analyze
-// @version      1.4.1
+// @version      1.4.2
 // @description  获取UP主公开投稿；在视频播放页获取全部分P标题以及当前P内的章节/看点。
 // @author       shandianchengzi
 // @license      MIT
@@ -1586,10 +1586,23 @@
     }
   }
 
+  function removeOnlineViewerNotice() {
+    // 仅在视频播放页执行。隐藏规则避免播放器异步重建 DOM 时短暂闪现。
+    if (!document.getElementById('bae-hide-online-viewers')) {
+      const style = document.createElement('style');
+      style.id = 'bae-hide-online-viewers';
+      style.textContent = '.bpx-player-video-info-online { display: none !important; }';
+      document.documentElement.appendChild(style);
+    }
+    // 直接移除“XX 人正在看”节点；复用已有的页面检测轮询来处理播放器重建。
+    document.querySelectorAll('.bpx-player-video-info-online').forEach((node) => node.remove());
+  }
+
   function ensureChapterUiForCurrentPage() {
     const bvid = getBvidFromUrl();
     if (!bvid) return;
 
+    removeOnlineViewerNotice();
     createChapterUi();
 
     if (lastPartBvid && lastPartBvid !== bvid) {
