@@ -105,5 +105,8 @@ try{
  await page.locator('.bae-view-subtitle').click();
  await page.locator('.bae-subtitle-row').first().waitFor();
  assert.equal(requests,beforeSubtitle);
- console.log('PASS: upload filters, cached reopening, chapters, subtitle language switching and SRT/JSON; screenshots generated.');
+ await page.locator('.bae-subtitle-close').click();
+ await page.evaluate(()=>history.pushState({},'', '/video/BV1Demo000004?p=2'));
+ await page.waitForFunction(()=>document.querySelector('.bae-view-subtitle')?.disabled===true);
+ console.log('PASS: upload filters, chapters, subtitle switching/export/cache and P-change invalidation; screenshots generated.');
 } finally{await browser.close();}
