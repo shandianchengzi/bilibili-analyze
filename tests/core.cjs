@@ -33,7 +33,7 @@ const cues=t.normalizeSubtitleCues({body:[
 ]});
 assert.equal(cues.length,2);
 assert.equal(t.srtTimestamp(3600.005),'01:00:00,005');
-assert.equal(t.toSubtitleSrt(cues),'1\r\n00:00:01,234 --> 00:00:03,001\r\n第一行\n第二行\r\n\r\n2\r\n01:00:00,005 --> 01:00:01,700\r\n字幕二\r\n');
+assert.equal(t.toSubtitleSrt(cues),'1\r\n00:00:01,234 --> 00:00:03,001\r\n第一行\r\n第二行\r\n\r\n2\r\n01:00:00,005 --> 01:00:01,700\r\n字幕二\r\n');
 assert.equal(t.toSubtitleTxt(cues),'第一行\n第二行\n字幕二\n');
 assert.equal(t.normalizeSubtitleUrl('//aisubtitle.hdslb.com/bfs/subtitle/test.json'),'https://aisubtitle.hdslb.com/bfs/subtitle/test.json');
 assert.throws(()=>t.normalizeSubtitleUrl('https://hdslb.com.evil.example/x.json'),/不属于/);
