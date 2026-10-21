@@ -1,14 +1,14 @@
 // ==UserScript==
 // @name         Bilibili 投稿与视频章节导出
 // @namespace    https://github.com/shandianchengzi/bilibili-analyze
-// @version      1.4.2
-// @description  获取UP主公开投稿；在视频播放页获取全部分P标题以及当前P内的章节/看点。
+// @version      1.5.0
+// @description  导出UP主投稿、视频分P标题、当前P的章节/看点与现有字幕（SRT/TXT/JSON）。
 // @author       shandianchengzi
 // @license      MIT
 // @homepageURL  https://github.com/shandianchengzi/bilibili-analyze
 // @supportURL   https://github.com/shandianchengzi/bilibili-analyze/issues
 // @name:en      Bilibili Uploads and Video Chapters Exporter
-// @description:en Export public uploads with collection filters, and copy or export video chapters as JSON and CSV.
+// @description:en Export uploads, video parts and chapters, and current-part subtitles as SRT, TXT or JSON.
 // @match        https://space.bilibili.com/*
 // @match        https://www.bilibili.com/video/*
 // @require      https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js
@@ -17,6 +17,9 @@
 // @grant        unsafeWindow
 // @connect      api.bilibili.com
 // @connect      member.bilibili.com
+// @connect      *.hdslb.com
+// @connect      *.bilibili.com
+// @connect      *.biliimg.com
 // @run-at       document-idle
 // @noframes
 // ==/UserScript==
@@ -48,6 +51,10 @@
   let partRows = [];
   let partContext = null;
   let lastPartBvid = null;
+  let subtitleContext = null;
+  let subtitleTracks = [];
+  let subtitleCache = new Map();
+  let lastSubtitleKey = null;
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -1448,7 +1455,7 @@
     root.id = 'bili-chapter-exporter';
     root.innerHTML = `
       <div class="bae-panel-header">
-        <div class="bae-chapter-panel-title">视频分 P / 章节导出</div>
+        <div class="bae-chapter-panel-title">视频分 P / 章节 / 字幕导出</div>
         <button type="button" class="bae-collapse-toggle" aria-label="收起工具面板">−</button>
       </div>
       <div class="bae-panel-body">
@@ -1460,6 +1467,10 @@
         <div class="bae-chapter-actions">
           <button class="bae-fetch-chapter">获取章节</button>
           <button class="bae-view-chapter" disabled>再次查看章节</button>
+        </div>
+        <div class="bae-chapter-actions">
+          <button class="bae-fetch-subtitle">获取字幕</button>
+          <button class="bae-view-subtitle" disabled>查看字幕</button>
         </div>
       </div>
     `;
@@ -1482,8 +1493,12 @@
       #bili-chapter-exporter button {
         flex: 1; border: 0; border-radius: 6px; padding: 7px 10px; cursor: pointer; font-size: 13px;
       }
-      #bili-chapter-exporter .bae-fetch-chapter { background: #00aeec; color: #fff; }
-      #bili-chapter-exporter .bae-view-chapter { background: #00b578; color: #fff; }
+      #bili-chapter-exporter .bae-fetch-chapter,
+      #bili-chapter-exporter .bae-fetch-subtitle,
+      #bili-chapter-exporter .bae-fetch-parts { background: #00aeec; color: #fff; }
+      #bili-chapter-exporter .bae-view-chapter,
+      #bili-chapter-exporter .bae-view-subtitle,
+      #bili-chapter-exporter .bae-view-parts { background: #00b578; color: #fff; }
       #bili-chapter-exporter button:disabled { opacity: .5; cursor: not-allowed; }
     `;
 
@@ -1495,6 +1510,8 @@
     root.querySelector('.bae-fetch-parts').addEventListener('click', fetchCurrentVideoParts);
     root.querySelector('.bae-view-parts').addEventListener('click', showPartDialog);
     root.querySelector('.bae-fetch-chapter').addEventListener('click', fetchCurrentVideoChapters);
+    root.querySelector('.bae-fetch-subtitle').addEventListener('click', fetchCurrentVideoSubtitles);
+    root.querySelector('.bae-view-subtitle').addEventListener('click', showSubtitleDialog);
     root.querySelector('.bae-view-chapter').addEventListener('click', () => {
       if (chapterRows.length && chapterContext) showChapterDialog(chapterRows, chapterContext);
     });
@@ -1586,6 +1603,293 @@
     }
   }
 
+
+  // 只使用 B 站播放器提供的现有字幕，不做自动语音识别或音频下载。
+  function normalizeSubtitleUrl(value) {
+    let raw = String(value || '').trim();
+    if (raw.startsWith('//')) raw = 'https:' + raw;
+    if (raw.startsWith('http://')) raw = 'https://' + raw.slice(7);
+    let url;
+    try { url = new URL(raw); }
+    catch (_) { throw new Error('字幕资源 URL 无效。'); }
+    const host = url.hostname.toLowerCase();
+    if (url.protocol !== 'https:' || !['hdslb.com', 'bilibili.com', 'biliimg.com'].some(
+      (domain) => host === domain || host.endsWith('.' + domain)
+    )) throw new Error('字幕资源不属于 B 站官方域名，已拒绝下载。');
+    return url.href;
+  }
+
+  function normalizeSubtitleCues(data) {
+    if (!data || !Array.isArray(data.body)) throw new Error('字幕 JSON 缺少 body 数组。');
+    return data.body.map((cue, i) => {
+      const from = Number(cue?.from);
+      const to = Number(cue?.to);
+      return {
+        index: i + 1,
+        from, to,
+        content: String(cue?.content ?? '').replace(/\r\n?/g, '\n').trim(),
+        raw: cue,
+      };
+    }).filter((cue) => Number.isFinite(cue.from) && Number.isFinite(cue.to) &&
+      cue.from >= 0 && cue.to > cue.from && cue.content);
+  }
+
+  function srtTimestamp(seconds) {
+    const ms = Math.round(Math.max(0, Number(seconds) || 0) * 1000);
+    const pad = (num, size = 2) => String(num).padStart(size, '0');
+    const hours = Math.floor(ms / 3600000);
+    return `${pad(hours)}:${pad(Math.floor(ms / 60000) % 60)}:${pad(Math.floor(ms / 1000) % 60)},${pad(ms % 1000, 3)}`;
+  }
+
+  function toSubtitleSrt(rows) {
+    return rows.map((row, i) =>
+      `${i + 1}\r\n${srtTimestamp(row.from)} --> ${srtTimestamp(row.to)}\r\n${row.content}`
+    ).join('\r\n\r\n') + (rows.length ? '\r\n' : '');
+  }
+
+  function toSubtitleTxt(rows) {
+    return rows.map((row) => row.content).join('\n') + (rows.length ? '\n' : '');
+  }
+
+  async function fetchSignedSubtitleInfo(video, cid) {
+    // 不回退到旧 /x/player/v2：该接口在部分风控情形下可能返回错误视频的字幕。
+    const keys = await getWbiKeys();
+    const params = video.aid ? { aid: video.aid, cid } : { bvid: video.bvid, cid };
+    const json = await apiFetch('/x/player/wbi/v2?' + signWbi(params, keys.imgKey, keys.subKey));
+    if (json.code !== 0 || !json.data) {
+      throw new Error('字幕列表接口失败：' + json.code + ' ' + (json.message || ''));
+    }
+    const data = json.data;
+    if ((data.cid && String(data.cid) !== String(cid)) ||
+        (data.aid && video.aid && String(data.aid) !== String(video.aid)) ||
+        (data.bvid && String(data.bvid).toLowerCase() !== String(video.bvid).toLowerCase())) {
+      throw new Error('播放器返回的视频标识与当前视频不一致，已拒绝使用该字幕列表。');
+    }
+    return data;
+  }
+
+  function closeSubtitleDialog() {
+    document.getElementById('bae-subtitle-overlay')?.remove();
+  }
+
+  function showSubtitleDialog() {
+    const context = subtitleContext;
+    if (!context || !subtitleTracks.length ||
+        context.bvid !== getBvidFromUrl() || context.pageNo !== getCurrentVideoPageNo()) {
+      setChapterStatus('尚未取得当前分 P 的字幕，请点击“获取字幕”。');
+      return;
+    }
+    closeSubtitleDialog();
+    const overlay = document.createElement('div');
+    overlay.id = 'bae-subtitle-overlay';
+    overlay.innerHTML = `
+      <div class="bae-subtitle-modal">
+        <div class="bae-subtitle-head">
+          <div><div class="bae-subtitle-title">当前 P 字幕导出</div>
+          <div class="bae-subtitle-meta">${escapeHtml(context.title)} · P${context.pageNo} · ${escapeHtml(context.bvid)}</div></div>
+          <button class="bae-subtitle-close" type="button" title="关闭">×</button>
+        </div>
+        <div class="bae-subtitle-toolbar">
+          <label for="bae-subtitle-select">字幕轨道</label>
+          <select id="bae-subtitle-select">
+            ${subtitleTracks.map((track, i) => `<option value="${i}">${escapeHtml(track.lan_doc || track.lan || '未知语言')}（${escapeHtml(track.lan || 'unknown')}${Number(track.ai_type) === 1 ? ' · AI 字幕' : ''}）</option>`).join('')}
+          </select>
+          <span class="bae-subtitle-count">正在加载字幕……</span>
+        </div>
+        <div class="bae-subtitle-list"></div>
+        <div class="bae-subtitle-actions">
+          <button type="button" class="bae-subtitle-copy" disabled>复制纯文本</button>
+          <button type="button" class="bae-subtitle-srt" disabled>导出 SRT</button>
+          <button type="button" class="bae-subtitle-txt" disabled>导出 TXT</button>
+          <button type="button" class="bae-subtitle-json" disabled>导出 JSON</button>
+          <button type="button" class="bae-subtitle-close-footer">关闭</button>
+        </div>
+      </div>
+    `;
+    const style = document.createElement('style');
+    style.textContent = `
+      #bae-subtitle-overlay { position:fixed;inset:0;z-index:2147483647;display:flex;
+        align-items:center;justify-content:center;padding:20px;box-sizing:border-box;
+        background:rgba(0,0,0,.48);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif }
+      #bae-subtitle-overlay .bae-subtitle-modal { width:min(850px,96vw);height:min(740px,92vh);
+        background:#fff;color:#18191c;display:flex;flex-direction:column;overflow:hidden;
+        border-radius:12px;box-shadow:0 12px 42px rgba(0,0,0,.28) }
+      #bae-subtitle-overlay .bae-subtitle-head { display:flex;justify-content:space-between;gap:16px;
+        padding:18px 20px;border-bottom:1px solid #e3e5e7 }
+      #bae-subtitle-overlay .bae-subtitle-title { font-weight:700;font-size:18px }
+      #bae-subtitle-overlay .bae-subtitle-meta { color:#61666d;word-break:break-word;margin-top:5px }
+      #bae-subtitle-overlay .bae-subtitle-toolbar { display:flex;align-items:center;flex-wrap:wrap;
+        gap:10px;padding:12px 20px;border-bottom:1px solid #e3e5e7 }
+      #bae-subtitle-overlay .bae-subtitle-toolbar select { padding:6px;max-width:280px;min-width:130px }
+      #bae-subtitle-overlay .bae-subtitle-count { color:#61666d }
+      #bae-subtitle-overlay .bae-subtitle-list { flex:1;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere }
+      #bae-subtitle-overlay .bae-subtitle-row { display:grid;grid-template-columns:150px minmax(0,1fr);
+        padding:10px 20px;gap:14px;border-bottom:1px solid #f1f2f3 }
+      #bae-subtitle-overlay .bae-subtitle-time { color:#61666d;font-variant-numeric:tabular-nums }
+      #bae-subtitle-overlay .bae-subtitle-actions { display:flex;justify-content:flex-end;flex-wrap:wrap;
+        gap:8px;padding:14px 20px;border-top:1px solid #e3e5e7 }
+      #bae-subtitle-overlay button { border:1px solid #c9ccd0;border-radius:6px;
+        padding:7px 11px;background:#fff;cursor:pointer }
+      #bae-subtitle-overlay button:disabled { opacity:.5;cursor:not-allowed }
+      #bae-subtitle-overlay .bae-subtitle-srt { background:#00aeec;color:white;border-color:#00aeec }
+      #bae-subtitle-overlay .bae-subtitle-close { border:0;font-size:26px;line-height:1;
+        color:#9499a0;padding:0 }
+      @media(max-width:550px) { #bae-subtitle-overlay .bae-subtitle-row { grid-template-columns:1fr;gap:4px } }
+    `;
+    overlay.appendChild(style);
+    document.body.appendChild(overlay);
+    const select = overlay.querySelector('#bae-subtitle-select');
+    const list = overlay.querySelector('.bae-subtitle-list');
+    const status = overlay.querySelector('.bae-subtitle-count');
+    const actionButtons = [...overlay.querySelectorAll('.bae-subtitle-actions button:not(.bae-subtitle-close-footer)')];
+    let currentRows = null, currentTrack = null, requestSeq = 0;
+
+    const validPage = () => context === subtitleContext &&
+      context.bvid === getBvidFromUrl() && context.pageNo === getCurrentVideoPageNo();
+    const renderTrack = async () => {
+      const request = ++requestSeq;
+      const index = Number(select.value);
+      const track = subtitleTracks[index];
+      currentRows = null;
+      currentTrack = null;
+      actionButtons.forEach((button) => { button.disabled = true; });
+      list.textContent = '';
+      status.textContent = '正在读取字幕文件……';
+      try {
+        let rows = subtitleCache.get(track.id_str || String(track.id || index));
+        if (!rows) {
+          const data = await pageFetchJson(normalizeSubtitleUrl(track.subtitle_url))
+            .catch(() => gmFetchJson(normalizeSubtitleUrl(track.subtitle_url)));
+          rows = normalizeSubtitleCues(data);
+          if (rows.length) subtitleCache.set(track.id_str || String(track.id || index), rows);
+        }
+        if (request !== requestSeq || !validPage() || !overlay.isConnected) return;
+        if (!rows.length) {
+          status.textContent = '此字幕轨道没有有效的字幕条目。可尝试切换其他语言。';
+          return;
+        }
+        currentTrack = track;
+        currentRows = rows;
+        status.textContent = `共 ${rows.length} 条字幕`;
+        list.innerHTML = rows.map((row) =>
+          `<div class="bae-subtitle-row"><div class="bae-subtitle-time">${srtTimestamp(row.from)} → ${srtTimestamp(row.to)}</div><div>${escapeHtml(row.content)}</div></div>`
+        ).join('');
+        actionButtons.forEach((button) => { button.disabled = false; });
+      } catch (err) {
+        if (request === requestSeq && validPage() && overlay.isConnected) {
+          status.textContent = '读取失败：' + (err?.message || err);
+        }
+      }
+    };
+    select.addEventListener('change', renderTrack);
+    const close = () => { requestSeq++; closeSubtitleDialog(); };
+    overlay.querySelector('.bae-subtitle-close').addEventListener('click', close);
+    overlay.querySelector('.bae-subtitle-close-footer').addEventListener('click', close);
+
+    const currentExport = () => {
+      if (!currentRows || !currentTrack || !validPage()) {
+        throw new Error('当前视频或分 P 已变化，请重新获取字幕。');
+      }
+      const base = safeFilename(
+        context.title + '_' + context.bvid + (context.pageCount > 1 ? '_P' + context.pageNo : '') +
+        '_' + (currentTrack.lan || 'subtitle') + '_字幕'
+      );
+      return { base, rows: currentRows, track: currentTrack };
+    };
+    const exportFile = async (type) => {
+      try {
+        const { base, rows, track } = currentExport();
+        let data, mime;
+        if (type === 'srt') { data = toSubtitleSrt(rows); mime = 'text/plain;charset=utf-8'; }
+        else if (type === 'txt') { data = toSubtitleTxt(rows); mime = 'text/plain;charset=utf-8'; }
+        else {
+          data = JSON.stringify({
+            exported_at: new Date().toISOString(), bvid: context.bvid, aid: context.aid,
+            cid: context.cid, title: context.title, page_no: context.pageNo,
+            part_title: context.partTitle, subtitle_track: track, subtitle_count: rows.length,
+            subtitles: rows, source: context.source,
+          }, null, 2);
+          mime = 'application/json;charset=utf-8';
+        }
+        await downloadBlob(base + '.' + type, data, mime);
+        setChapterStatus(`已导出 P${context.pageNo} 的 ${rows.length} 条 ${type.toUpperCase()} 字幕。`);
+      } catch (err) {
+        status.textContent = '导出失败：' + (err?.message || err);
+      }
+    };
+    overlay.querySelector('.bae-subtitle-srt').addEventListener('click', () => exportFile('srt'));
+    overlay.querySelector('.bae-subtitle-txt').addEventListener('click', () => exportFile('txt'));
+    overlay.querySelector('.bae-subtitle-json').addEventListener('click', () => exportFile('json'));
+    overlay.querySelector('.bae-subtitle-copy').addEventListener('click', async () => {
+      try {
+        const { rows } = currentExport();
+        const content = toSubtitleTxt(rows);
+        try { await navigator.clipboard.writeText(content); }
+        catch (_) {
+          const textarea = document.createElement('textarea');
+          textarea.value = content;
+          textarea.style.cssText = 'position:fixed;opacity:0';
+          document.body.appendChild(textarea);
+          textarea.select();
+          const ok = document.execCommand('copy');
+          textarea.remove();
+          if (!ok) throw new Error('浏览器拒绝写入剪贴板。');
+        }
+        status.textContent = `已复制 ${rows.length} 条字幕文本。`;
+      } catch (err) { status.textContent = '复制失败：' + (err?.message || err); }
+    });
+    const preferred = subtitleTracks.findIndex((track) =>
+      /^(zh-Hans|zh-CN)$/i.test(track.lan || '') && Number(track.ai_type) !== 1);
+    if (preferred >= 0) select.value = String(preferred);
+    renderTrack();
+  }
+
+  async function fetchCurrentVideoSubtitles() {
+    const bvid = getBvidFromUrl();
+    if (!bvid) { setChapterStatus('没有从当前地址识别到 BV 号。'); return; }
+    const btn = document.querySelector('#bili-chapter-exporter .bae-fetch-subtitle');
+    if (btn) btn.disabled = true;
+    const originalPage = getCurrentVideoPageNo();
+    try {
+      setChapterStatus(`${bvid} · P${originalPage}\n正在取得字幕轨道列表……`);
+      const video = await fetchVideoDetail(bvid);
+      if (getBvidFromUrl() !== bvid || getCurrentVideoPageNo() !== originalPage) return;
+      const pageNo = Math.min(originalPage, Math.max(1, video.pages?.length || 1));
+      const page = video.pages?.find((part) => Number(part.page) === pageNo) ||
+        video.pages?.[pageNo - 1] || { cid: video.cid, part: video.title };
+      if (!page?.cid) throw new Error('没有找到当前分 P 的 CID。');
+      const player = await fetchSignedSubtitleInfo(video, page.cid);
+      if (getBvidFromUrl() !== bvid || getCurrentVideoPageNo() !== originalPage) return;
+      const tracks = Array.isArray(player.subtitle?.subtitles) ? player.subtitle.subtitles : [];
+      // 只显示有 URL 的轨道；不把登录受限返回的空列表冒充无字幕。
+      subtitleContext = null;
+      subtitleCache = new Map();
+      subtitleTracks = tracks.filter((track) => track && track.subtitle_url);
+      lastSubtitleKey = bvid + ':p' + originalPage;
+      closeSubtitleDialog();
+      const viewBtn = document.querySelector('#bili-chapter-exporter .bae-view-subtitle');
+      if (viewBtn) viewBtn.disabled = !subtitleTracks.length;
+      if (!subtitleTracks.length) {
+        const loginHint = player.need_login_subtitle || Number(player.login_mid || 0) === 0
+          ? '当前接口没有返回可用轨道，可能需要先登录 B 站。' : '此 P 未返回可用字幕轨道，或字幕受权限限制。';
+        setChapterStatus(`${bvid} · P${pageNo}\n${loginHint}\n脚本不会把章节或音频自动当作字幕。`);
+        return;
+      }
+      subtitleContext = {
+        bvid, aid: video.aid, cid: page.cid, pageNo,
+        pageCount: video.pages?.length || 1, title: video.title || document.title,
+        partTitle: page.part || page.title || '', source: location.href,
+      };
+      setChapterStatus(`已找到当前 P 的 ${subtitleTracks.length} 个字幕轨道。可选择语言，导出 SRT / TXT / JSON。`);
+      showSubtitleDialog();
+    } catch (err) {
+      console.error('[Bilibili字幕导出]', err);
+      setChapterStatus('字幕获取失败：' + (err?.message || err));
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   function removeOnlineViewerNotice() {
     // 仅在视频播放页执行。隐藏规则避免播放器异步重建 DOM 时短暂闪现。
     if (!document.getElementById('bae-hide-online-viewers')) {
@@ -1615,6 +1919,16 @@
     }
 
     const key = bvid + ':p' + getCurrentVideoPageNo();
+    if (lastSubtitleKey && key !== lastSubtitleKey) {
+      subtitleContext = null;
+      subtitleTracks = [];
+      subtitleCache = new Map();
+      lastSubtitleKey = null;
+      closeSubtitleDialog();
+      const subtitleBtn = document.querySelector('#bili-chapter-exporter .bae-view-subtitle');
+      if (subtitleBtn) subtitleBtn.disabled = true;
+      setChapterStatus('当前视频/分 P 已变化，字幕需要重新获取。');
+    }
     if (lastVideoKey && key !== lastVideoKey) {
       chapterRows = [];
       chapterContext = null;
