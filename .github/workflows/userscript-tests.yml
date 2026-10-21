@@ -1,0 +1,41 @@
+name: Userscript regression tests
+
+on:
+  push:
+    paths:
+      - 'bilibili_space_video_exporter.user.js'
+      - 'tests/**'
+      - '.github/workflows/userscript-tests.yml'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify JavaScript syntax
+        run: |
+          node --check bilibili_space_video_exporter.user.js
+          node --check tests/core.cjs
+          node --check tests/demo.mjs
+      - name: Run core regression tests
+        run: node tests/core.cjs
+
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Playwright
+        run: |
+          npm init -y
+          npm install --no-save --no-package-lock playwright@1.56.1
+          npx playwright install --with-deps chromium
+      - name: Run intercepted browser fixtures
+        run: node tests/demo.mjs
