@@ -2,7 +2,7 @@
 
 # Bilibili Uploads and Video Chapters Exporter
 
-A single-file userscript for exporting public uploads and video chapters to JSON / CSV.
+A single-file userscript for exporting public uploads, video chapters, and available current-part subtitles.
 
 ## Features
 
@@ -12,6 +12,8 @@ A single-file userscript for exporting public uploads and video chapters to JSON
 - Reopen the selection dialog using cached data without fetching again.
 - Collapse either floating panel to a compact bottom-right tab using the minus button; click plus or the compact tab to expand. Each panel remembers its collapsed state across refreshes without losing fetched data during the current page session.
 - On BV video pages, separately fetch **all part (P1–Pn) titles/CIDs/durations** or the current part's chapter/view-point timestamps; copy or export either set as JSON / CSV. Private owner-only videos use the authenticated Creator Center endpoint where available.
+
+- On video pages, select an existing subtitle language track for the current part, preview and copy text, or export **SRT / TXT / JSON**. Previously loaded subtitles are cached in memory for reopening. A WBI-signed player endpoint identifies available tracks, and subtitle URLs are restricted to Bilibili-owned CDN domains.
 
 ## Install
 
@@ -26,7 +28,7 @@ On `https://space.bilibili.com/<UID>/upload/video`, click 获取投稿列表 (fe
 
 Changing the filter does not clear selections outside that filter. Check the selected count before exporting.
 
-On `https://www.bilibili.com/video/<BVID>?p=N`, click 获取分P (fetch all parts) to list every P title, CID, and duration, including on your own private videos. Click 查看分P (view parts) to reopen and export the cached list without fetching again. 获取章节 (fetch chapters) is a separate function for the current part's optional player view points; no view points does not mean that the part title is unavailable. 再次查看 (view again) reopens cached chapters. Change parts and fetch again.
+On `https://www.bilibili.com/video/<BVID>?p=N`, click 获取分P (fetch all parts) to list every P title, CID, and duration, including on your own private videos. Click 查看分P (view parts) to reopen and export the cached list without fetching again. 获取章节 (fetch chapters) is a separate function for the current part's optional player view points; no view points does not mean that the part title is unavailable. 再次查看 (view again) reopens cached chapters. Change parts and fetch again. 获取字幕 (fetch subtitles) displays the current part's available subtitle tracks; choose a language to preview/download. 查看字幕 (view subtitles) reopens the selection and reuses already downloaded tracks. The subtitles must exist on Bilibili and be accessible to your current account.
 
 ## Screenshots
 
@@ -37,7 +39,7 @@ Screenshots captured by the author while using the script on Bilibili, showing u
 
 ## Limits and privacy
 
-Only publicly accessible uploads returned by Bilibili are available. Missing API fields remain empty; collection classification depends on returned season metadata. Chapter extraction reads `view_points`, and does not generate chapters from audio or subtitles.
+Only publicly accessible uploads returned by Bilibili are available. Missing API fields remain empty; collection classification depends on returned season metadata. Chapter extraction reads `view_points`, and does not generate chapters from audio or subtitles. Subtitle export uses existing caption data only (no speech recognition). A missing subtitle list may indicate login or permissions restrictions, not necessarily that the video has no subtitles.
 
 Requests reuse your browser login session. The script does not upload cookies or exported data to the author. CryptoJS is loaded from cdnjs; preview images use URLs returned by Bilibili. Images and videos themselves are not downloaded.
 
