@@ -1643,7 +1643,7 @@
 
   function toSubtitleSrt(rows) {
     return rows.map((row, i) =>
-      `${i + 1}\r\n${srtTimestamp(row.from)} --> ${srtTimestamp(row.to)}\r\n${row.content}`
+      `${i + 1}\r\n${srtTimestamp(row.from)} --> ${srtTimestamp(row.to)}\r\n${row.content.replace(/\n/g, '\r\n')}`
     ).join('\r\n\r\n') + (rows.length ? '\r\n' : '');
   }
 
@@ -1854,9 +1854,9 @@
       setChapterStatus(`${bvid} · P${originalPage}\n正在取得字幕轨道列表……`);
       const video = await fetchVideoDetail(bvid);
       if (getBvidFromUrl() !== bvid || getCurrentVideoPageNo() !== originalPage) return;
-      const pageNo = Math.min(originalPage, Math.max(1, video.pages?.length || 1));
+      const pageNo = originalPage;
       const page = video.pages?.find((part) => Number(part.page) === pageNo) ||
-        video.pages?.[pageNo - 1] || { cid: video.cid, part: video.title };
+        video.pages?.[pageNo - 1] || (pageNo === 1 ? { cid: video.cid, part: video.title } : null);
       if (!page?.cid) throw new Error('没有找到当前分 P 的 CID。');
       const player = await fetchSignedSubtitleInfo(video, page.cid);
       if (getBvidFromUrl() !== bvid || getCurrentVideoPageNo() !== originalPage) return;
