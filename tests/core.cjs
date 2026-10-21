@@ -6,7 +6,7 @@ let source=fs.readFileSync(require('node:path').join(__dirname,'../bilibili_spac
 assert.match(source,/\/\/ @license\s+MIT/);
 assert.match(source,/\/\/ @version\s+1\.5\.0/);
 source=source.replace('  ensureUiForCurrentPage();\n  ensureChapterUiForCurrentPage();', '  globalThis.testApi={normalizeVideo,toCsv,normalizeChapter,toChapterCsv,signWbi,getMixinKey,normalizeSubtitleUrl,normalizeSubtitleCues,srtTimestamp,toSubtitleSrt,toSubtitleTxt};\n  ensureUiForCurrentPage();\n  ensureChapterUiForCurrentPage();');
-const ctx={location:{pathname:'/',href:'https://example.invalid/'},URL,Blob,console,setInterval:()=>{},CryptoJS:{MD5:s=>({toString:()=>crypto.createHash('md5').update(s).digest('hex')})}};
+const ctx={window:{},location:{pathname:'/',href:'https://example.invalid/'},URL,Blob,console,setInterval:()=>{},CryptoJS:{MD5:s=>({toString:()=>crypto.createHash('md5').update(s).digest('hex')})}};
 vm.runInNewContext(source,ctx);
 const t=ctx.testApi;
 const raw={title:'a,"b"',bvid:'BVdemo',aid:1,created:1760000000,pic:'//example.invalid/a.png',meta:{id:3,title:'Collection',ep_count:2}};
