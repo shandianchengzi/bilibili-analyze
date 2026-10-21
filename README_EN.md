@@ -17,6 +17,9 @@ A single-file userscript for exporting public uploads, video chapters, and avail
 
 ## Install
 
+**v1.5.1 CDN fix:** Bilibili AI subtitles may be delivered from `aisubtitle.hdslb.com`. The script now explicitly authorizes that host and downloads caption JSON with `credentials: 'omit'` (with an anonymous userscript-request fallback). Update or reinstall the userscript so Tampermonkey applies the new `@connect` metadata. No cookies or signed subtitle URLs need to be copied manually.
+
+
 Install Tampermonkey or Violentmonkey, then [install the userscript](https://raw.githubusercontent.com/shandianchengzi/bilibili-analyze/main/bilibili_space_video_exporter.user.js). Sign in to Bilibili and open a space or BV video page.
 
 [Install on Greasy Fork](https://greasyfork.org/zh-CN/scripts/598715-bilibili-%E6%8A%95%E7%A8%BF%E4%B8%8E%E8%A7%86%E9%A2%91%E7%AB%A0%E8%8A%82%E5%AF%BC%E5%87%BA).
