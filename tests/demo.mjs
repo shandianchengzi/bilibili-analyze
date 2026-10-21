@@ -16,12 +16,21 @@ const image = '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180">
 await page.route('**/*', async route=>{
  const u=new URL(route.request().url());
  if(u.pathname==='/demo-cover.svg') return route.fulfill({contentType:'image/svg+xml',body:image});
+ if(u.hostname==='aisubtitle.hdslb.com'){
+   const english=u.pathname.endsWith('en.json');
+   const data={body:english?[{from:1.5,to:2.8,content:'English subtitle'}]:[{from:1.234,to:3.001,content:'中文字幕一'},{from:4.2,to:6.5,content:'中文字幕二'}]};
+   return route.fulfill({contentType:'application/json',body:JSON.stringify(data),headers:{'access-control-allow-origin':route.request().headers().origin||'*','access-control-allow-credentials':'true'}});
+ }
  if(u.hostname==='api.bilibili.com'){
    requests++;
    let data;
    if(u.pathname.endsWith('/nav')) data={wbi_img:{img_url:'https://example.invalid/abcdefghijklmnopqrstuvwxyz012345.png',sub_url:'https://example.invalid/012345abcdefghijklmnopqrstuvwxyz.png'}};
    else if(u.pathname.endsWith('/arc/search')) data={page:{count:3},list:{vlist:uploads.map(v=>({...v,pic:'https://space.bilibili.com/demo-cover.svg'}))}};
    else if(u.pathname.endsWith('/view')) data={aid:42,bvid:'BV1Demo000004',title:'演示视频：章节整理',cid:101,pages:[{page:1,cid:101,part:'演示分 P'}]};
+   else if(u.pathname.endsWith('/player/wbi/v2')) data={aid:42,bvid:'BV1Demo000004',cid:101,login_mid:123456,subtitle:{subtitles:[
+     {id:1,id_str:'1',lan:'zh-Hans',lan_doc:'中文（简体）',subtitle_url:'//aisubtitle.hdslb.com/bfs/subtitle/zh.json',ai_type:0},
+     {id:2,id_str:'2',lan:'en-US',lan_doc:'English',subtitle_url:'//aisubtitle.hdslb.com/bfs/subtitle/en.json',ai_type:1}
+   ]}};
    else data={view_points:[{title:'开场',from:0,to:220,imgUrl:'https://space.bilibili.com/demo-cover.svg'},{title:'第一部分',from:220,to:289,imgUrl:'https://space.bilibili.com/demo-cover.svg'},{title:'第二部分',from:289,to:408,imgUrl:'https://space.bilibili.com/demo-cover.svg'}]};
    return route.fulfill({contentType:'application/json',body:JSON.stringify({code:0,data}),headers:{'access-control-allow-origin':route.request().headers().origin||'*','access-control-allow-credentials':'true'}});
  }
@@ -73,5 +82,28 @@ try{
  const chaptersBefore=requests;
  await page.locator('.bae-view-chapter').click();
  assert.equal(requests,chaptersBefore);
- console.log('PASS: upload filters, cached reopening, JSON/CSV output, chapters; screenshots generated.');
+ await page.locator('.bae-chapter-close').click();
+ await page.locator('.bae-fetch-subtitle').click();
+ await page.locator('#bae-subtitle-overlay').waitFor();
+ await page.locator('.bae-subtitle-row').first().waitFor();
+ assert.equal(await page.locator('.bae-subtitle-row').count(),2);
+ await page.locator('.bae-subtitle-srt').click();
+ await page.waitForFunction(()=>window.demoDownloads.length===3);
+ files=await page.evaluate(()=>window.demoDownloads);
+ assert.ok(files[2].name.endsWith('_zh-Hans_字幕.srt'));
+ assert.ok(files[2].text.includes('00:00:01,234 --> 00:00:03,001'));
+ await page.locator('#bae-subtitle-select').selectOption('1');
+ await page.locator('.bae-subtitle-row').first().waitFor();
+ assert.equal(await page.locator('.bae-subtitle-row').count(),1);
+ await page.locator('.bae-subtitle-json').click();
+ await page.waitForFunction(()=>window.demoDownloads.length===4);
+ files=await page.evaluate(()=>window.demoDownloads);
+ assert.equal(JSON.parse(files[3].text).subtitle_count,1);
+ assert.equal(JSON.parse(files[3].text).subtitle_track.lan,'en-US');
+ await page.locator('.bae-subtitle-close').click();
+ const beforeSubtitle=requests;
+ await page.locator('.bae-view-subtitle').click();
+ await page.locator('.bae-subtitle-row').first().waitFor();
+ assert.equal(requests,beforeSubtitle);
+ console.log('PASS: upload filters, cached reopening, chapters, subtitle language switching and SRT/JSON; screenshots generated.');
 } finally{await browser.close();}
