@@ -4,8 +4,11 @@ const assert=require('node:assert/strict');
 const crypto=require('node:crypto');
 let source=fs.readFileSync(require('node:path').join(__dirname,'../bilibili_space_video_exporter.user.js'),'utf8');
 assert.match(source,/\/\/ @license\s+MIT/);
-assert.match(source,/\/\/ @version\s+1\.5\.0/);
-source=source.replace('  ensureUiForCurrentPage();\n  ensureChapterUiForCurrentPage();', '  globalThis.testApi={normalizeVideo,toCsv,normalizeChapter,toChapterCsv,signWbi,getMixinKey,normalizeSubtitleUrl,normalizeSubtitleCues,srtTimestamp,toSubtitleSrt,toSubtitleTxt};\n  ensureUiForCurrentPage();\n  ensureChapterUiForCurrentPage();');
+assert.match(source,/\/\/ @version\s+1\.5\.1/);
+assert.match(source,/\/\/ @connect\s+aisubtitle\.hdslb\.com/);
+assert.match(source,/\/\/ @connect\s+hdslb\.com/);
+assert.doesNotMatch(source,/\/\/ @connect\s+\*\.hdslb\.com/);
+source=source.replace('  ensureUiForCurrentPage();\n  ensureChapterUiForCurrentPage();', '  globalThis.testApi={normalizeVideo,toCsv,normalizeChapter,toChapterCsv,signWbi,getMixinKey,normalizeSubtitleUrl,normalizeSubtitleCues,srtTimestamp,toSubtitleSrt,toSubtitleTxt,pageFetchJson,gmFetchJson};\n  ensureUiForCurrentPage();\n  ensureChapterUiForCurrentPage();');
 const ctx={window:{},location:{pathname:'/',href:'https://example.invalid/'},URL,Blob,console,setInterval:()=>{},CryptoJS:{MD5:s=>({toString:()=>crypto.createHash('md5').update(s).digest('hex')})}};
 vm.runInNewContext(source,ctx);
 const t=ctx.testApi;
@@ -39,4 +42,32 @@ assert.equal(t.normalizeSubtitleUrl('//aisubtitle.hdslb.com/bfs/subtitle/test.js
 assert.throws(()=>t.normalizeSubtitleUrl('https://hdslb.com.evil.example/x.json'),/不属于/);
 assert.throws(()=>t.normalizeSubtitleUrl('javascript:alert(1)'),/不属于/);
 assert.throws(()=>t.normalizeSubtitleCues({body:null}),/body/);
-console.log('PASS: metadata, normalized fields, raw retention, CSV escaping/BOM, chapter time, WBI signature.');
+
+(async () => {
+  const originalFetch=ctx.window.fetch;
+  const seen=[];
+  ctx.window.fetch=async (url,options)=>{
+    seen.push({url,options});
+    return {ok:true,text:async()=>JSON.stringify({body:[{from:0,to:1,content:'示例字幕'}]})};
+  };
+  const url='https://aisubtitle.hdslb.com/bfs/ai_subtitle/prod/fixture?auth_key=fixture';
+  const fromPage=await t.pageFetchJson(url,{credentials:'omit'});
+  assert.equal(fromPage.body[0].content,'示例字幕');
+  assert.equal(seen[0].options.credentials,'omit');
+  assert.equal(seen[0].options.mode,'cors');
+  assert.equal(seen[0].options.referrer,ctx.location.href);
+  ctx.window.fetch=originalFetch;
+
+  let gmOptions;
+  ctx.GM_xmlhttpRequest=(options)=>{
+    gmOptions=options;
+    options.onload({status:200,responseText:JSON.stringify({body:[]})});
+  };
+  const fromExtension=await t.gmFetchJson(url,{anonymous:true,sendReferrer:false});
+  assert.equal(fromExtension.body.length,0);
+  assert.equal(gmOptions.anonymous,true);
+  assert.equal(gmOptions.headers.Referer,undefined);
+  assert.equal(gmOptions.url,url);
+  console.log('PASS: metadata, WBI signing, subtitle formats, exact CDN permissions, anonymous CDN fetch and GM fallback.');
+})().catch((err)=>{console.error(err);process.exitCode=1;});
+
