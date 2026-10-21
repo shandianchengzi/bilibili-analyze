@@ -17,7 +17,7 @@ await page.route('**/*', async route=>{
  const u=new URL(route.request().url());
  if(u.pathname==='/demo-cover.svg') return route.fulfill({contentType:'image/svg+xml',body:image});
  if(u.hostname==='aisubtitle.hdslb.com'){
-   const english=u.pathname.endsWith('en.json');
+   const english=u.pathname.includes('/en.json');
    const data={body:english?[{from:1.5,to:2.8,content:'English subtitle'}]:[{from:1.234,to:3.001,content:'中文字幕一'},{from:4.2,to:6.5,content:'中文字幕二'}]};
    return route.fulfill({contentType:'application/json',body:JSON.stringify(data),headers:{'access-control-allow-origin':route.request().headers().origin||'*','access-control-allow-credentials':'true'}});
  }
@@ -28,7 +28,7 @@ await page.route('**/*', async route=>{
    else if(u.pathname.endsWith('/arc/search')) data={page:{count:3},list:{vlist:uploads.map(v=>({...v,pic:'https://space.bilibili.com/demo-cover.svg'}))}};
    else if(u.pathname.endsWith('/view')) data={aid:42,bvid:'BV1Demo000004',title:'演示视频：章节整理',cid:101,pages:[{page:1,cid:101,part:'演示分 P'}]};
    else if(u.pathname.endsWith('/player/wbi/v2')) data={aid:42,bvid:'BV1Demo000004',cid:101,login_mid:123456,subtitle:{subtitles:[
-     {id:1,id_str:'1',lan:'zh-Hans',lan_doc:'中文（简体）',subtitle_url:'//aisubtitle.hdslb.com/bfs/subtitle/zh.json',ai_type:0},
+     {id:1,id_str:'1',lan:'ai-zh',lan_doc:'中文',subtitle_url:'//aisubtitle.hdslb.com/bfs/ai_subtitle/prod/fixture?auth_key=test',ai_type:1},
      {id:2,id_str:'2',lan:'en-US',lan_doc:'English',subtitle_url:'//aisubtitle.hdslb.com/bfs/subtitle/en.json',ai_type:1}
    ]}};
    else data={view_points:[{title:'开场',from:0,to:220,imgUrl:'https://space.bilibili.com/demo-cover.svg'},{title:'第一部分',from:220,to:289,imgUrl:'https://space.bilibili.com/demo-cover.svg'},{title:'第二部分',from:289,to:408,imgUrl:'https://space.bilibili.com/demo-cover.svg'}]};
@@ -42,6 +42,17 @@ async function load(url){
  // Test-only synchronous MD5 shim with a known signature value.
  // Live service-side signature verification is outside this fixture test.
  await page.evaluate(()=>{window.CryptoJS={MD5:()=>({toString:()=> 'fixture-md5-signature'})};});
+
+ await page.evaluate(()=>{
+   const nativeFetch=window.fetch.bind(window);
+   window.demoSubtitleFetchOptions=[];
+   window.fetch=(url,options)=>{
+     if(String(url).startsWith('https://aisubtitle.hdslb.com/')){
+       window.demoSubtitleFetchOptions.push({url:String(url),credentials:options?.credentials,mode:options?.mode});
+     }
+     return nativeFetch(url,options);
+   };
+ });
  await page.addScriptTag({content:source});
 }
 try{
@@ -90,7 +101,8 @@ try{
  await page.locator('.bae-subtitle-srt').click();
  await page.waitForFunction(()=>window.demoDownloads.length===3);
  files=await page.evaluate(()=>window.demoDownloads);
- assert.ok(files[2].name.endsWith('_zh-Hans_字幕.srt'));
+ assert.ok(files[2].name.endsWith('_ai-zh_字幕.srt'));
+ assert.equal((await page.evaluate(()=>window.demoSubtitleFetchOptions))[0].credentials,'omit');
  assert.ok(files[2].text.includes('00:00:01,234 --> 00:00:03,001'));
  await page.locator('#bae-subtitle-select').selectOption('1');
  await page.locator('.bae-subtitle-row').first().waitFor();
@@ -100,6 +112,7 @@ try{
  files=await page.evaluate(()=>window.demoDownloads);
  assert.equal(JSON.parse(files[3].text).subtitle_count,1);
  assert.equal(JSON.parse(files[3].text).subtitle_track.lan,'en-US');
+ assert.ok((await page.evaluate(()=>window.demoSubtitleFetchOptions)).every(row=>row.credentials==='omit' && row.mode==='cors'));
  await page.locator('.bae-subtitle-close').click();
  const beforeSubtitle=requests;
  await page.locator('.bae-view-subtitle').click();
