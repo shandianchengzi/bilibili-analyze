@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili 投稿与视频章节导出
 // @namespace    https://github.com/shandianchengzi/bilibili-analyze
-// @version      1.5.0
+// @version      1.5.1
 // @description  导出UP主投稿、视频分P标题、当前P的章节/看点与现有字幕（SRT/TXT/JSON）。
 // @author       shandianchengzi
 // @license      MIT
@@ -17,9 +17,10 @@
 // @grant        unsafeWindow
 // @connect      api.bilibili.com
 // @connect      member.bilibili.com
-// @connect      *.hdslb.com
-// @connect      *.bilibili.com
-// @connect      *.biliimg.com
+// @connect      aisubtitle.hdslb.com
+// @connect      hdslb.com
+// @connect      bilibili.com
+// @connect      biliimg.com
 // @run-at       document-idle
 // @noframes
 // ==/UserScript==
@@ -165,13 +166,13 @@
     return '\ufeff' + lines.join('\r\n');
   }
 
-  async function pageFetchJson(url) {
+  async function pageFetchJson(url, { credentials = 'include' } = {}) {
     const fetchImpl = pageWindow && pageWindow.fetch;
     if (typeof fetchImpl !== 'function') throw new Error('无法访问页面 fetch，不能复用当前 B 站登录态。');
 
     const response = await fetchImpl.call(pageWindow, url, {
       method: 'GET',
-      credentials: 'include',
+      credentials,
       mode: 'cors',
       headers: { Accept: 'application/json, text/plain, */*' },
       referrer: location.href,
@@ -182,7 +183,7 @@
     return JSON.parse(await response.text());
   }
 
-  function gmFetchJson(url) {
+  function gmFetchJson(url, { anonymous = false, sendReferrer = true } = {}) {
     return new Promise((resolve, reject) => {
       if (typeof GM_xmlhttpRequest !== 'function') {
         reject(new Error('GM_xmlhttpRequest 不可用。'));
@@ -191,8 +192,11 @@
       GM_xmlhttpRequest({
         method: 'GET',
         url,
-        anonymous: false,
-        headers: { Accept: 'application/json, text/plain, */*', Referer: location.href },
+        anonymous,
+        headers: {
+          Accept: 'application/json, text/plain, */*',
+          ...(sendReferrer ? { Referer: location.href } : {}),
+        },
         timeout: 20000,
         onload: (response) => {
           if (response.status < 200 || response.status >= 300) {
@@ -1758,8 +1762,24 @@
       try {
         let rows = subtitleCache.get(track.id_str || String(track.id || index));
         if (!rows) {
-          const data = await pageFetchJson(normalizeSubtitleUrl(track.subtitle_url))
-            .catch(() => gmFetchJson(normalizeSubtitleUrl(track.subtitle_url)));
+          const subtitleUrl = normalizeSubtitleUrl(track.subtitle_url);
+          // B 站官方字幕请求为跨域匿名 fetch；不需要把登录 Cookie 发到 CDN。
+          // 页面 fetch 受 CORS 限制时，再尝试 Tampermonkey 的跨域请求。
+          const data = await pageFetchJson(subtitleUrl, { credentials: 'omit' })
+            .catch(async (pageError) => {
+              try {
+                return await gmFetchJson(subtitleUrl, { anonymous: true, sendReferrer: false });
+              } catch (gmError) {
+                // 接口 URL 含有 auth_key，错误信息不可直接显示完整链接。
+                const detail = String(gmError?.message || gmError);
+                if (/Refused to connect|@connect list|not a part of the @connect/i.test(detail)) {
+                  throw new Error('油猴未授权访问字幕 CDN（aisubtitle.hdslb.com）。请更新或重新安装 v1.5.1 脚本，并确认新增的跨域访问权限。');
+                }
+                throw new Error('字幕下载失败。浏览器请求：' +
+                  String(pageError?.message || pageError).replace(/https?:\/\/\S+/g, '[字幕链接]') +
+                  '；扩展请求：' + detail.replace(/https?:\/\/\S+/g, '[字幕链接]'));
+              }
+            });
           rows = normalizeSubtitleCues(data);
           if (rows.length) subtitleCache.set(track.id_str || String(track.id || index), rows);
         }
